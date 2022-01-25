@@ -31,24 +31,33 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 
-EM_JS(void, em_libusb_notify, (void), {
-	dispatchEvent(new Event("em-libusb"));
+EM_JS(void, em_libusb_create_event_target, (void), {
+  const target = new EventTarget();
+  // lazily self-replace with a function that always returns the same object
+  em_libusb_create_event_target = () => target;
+  return target;
 });
 
 EM_ASYNC_JS(int, em_libusb_wait, (int timeout), {
+	const target = em_libusb_create_event_target();
+
 	let onEvent, timeoutId;
 
 	try {
 		return await new Promise(resolve => {
 			onEvent = () => resolve(0);
-			addEventListener('em-libusb', onEvent);
+			target.addEventListener('libusb', onEvent);
 
 			timeoutId = setTimeout(resolve, timeout, -1);
 		});
 	} finally {
-		removeEventListener('em-libusb', onEvent);
+		target.removeEventListener('libusb', onEvent);
 		clearTimeout(timeoutId);
 	}
+});
+
+EM_JS(void, em_libusb_notify, (void), {
+	em_libusb_create_event_target().dispatchEvent(new Event('libusb'));
 });
 #endif
 #include <unistd.h>

@@ -31,6 +31,17 @@ using namespace emscripten;
 #pragma clang diagnostic ignored "-Wunused-parameter"
 namespace {
 // clang-format off
+  EM_JS(EM_VAL, em_init_webusb, (void), {
+    let usb;
+    if (typeof navigator !== 'undefined') {
+      usb = navigator.usb;
+    } else {
+      const { WebUSB } = require('usb');
+      usb = new WebUSB({ allowAllDevices: true });
+    }
+    return Emval.toHandle(usb);
+  });
+
 	EM_JS(EM_VAL, em_promise_catch_impl, (EM_VAL handle), {
 		let promise = Emval.toValue(handle);
 		promise = promise.then(
@@ -136,8 +147,8 @@ void em_signal_transfer_completion_impl(usbi_transfer *itransfer,
   usbi_signal_transfer_completion(itransfer);
 }
 
-// Store the global `navigator.usb` once upon initialisation.
-thread_local const val web_usb = val::global("navigator")["usb"];
+// Store the global USB namespace once per thread.
+thread_local const val web_usb = val::take_ownership(em_init_webusb());
 
 int em_get_device_list(libusb_context *ctx, discovered_devs **devs) {
   // C++ equivalent of `await navigator.usb.getDevices()`.
