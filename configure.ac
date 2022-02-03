@@ -201,7 +201,6 @@ windows)
 	LT_LDFLAGS="${LT_LDFLAGS} -avoid-version -Wl,--add-stdcall-alias"
 	;;
 emscripten)
-	AC_SUBST(EXEEXT, [.html])
 	# Note: LT_LDFLAGS is not enough here because we need link flags for executable.
 	AM_LDFLAGS="${AM_LDFLAGS} --bind -s ASYNCIFY -s ASSERTIONS -s ALLOW_MEMORY_GROWTH"
 	;;
