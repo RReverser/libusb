@@ -40,7 +40,7 @@ using namespace emscripten;
 EM_JS_DEPS(em_promise_then_impl_deps, "$getWasmTableEntry");
 
 namespace {
-  typedef void(*PromiseCalback)(EM_VAL result, void *arg);
+typedef void (*PromiseCalback)(EM_VAL result, void* arg);
 
 // clang-format off
 	EM_JS(EM_VAL, em_promise_catch_impl, (EM_VAL handle), {
@@ -173,20 +173,33 @@ void em_signal_transfer_completion_impl(usbi_transfer* itransfer,
 // Store the global `navigator.usb` once upon initialisation.
 thread_local const val web_usb = val::global("navigator")["usb"];
 
-EM_JS(EM_VAL, em_request_descriptor_impl, (EM_VAL deviceHandle, uint16_t value, uint16_t maxLength), {
-  let device = Emval.toValue(deviceHandle);
-  let promise = device.controlTransferIn({
-    requestType: 'standard',
-    recipient: 'device',
-    request: /* LIBUSB_REQUEST_GET_DESCRIPTOR */ 6,
-    value,
-    index: 0
-  }, maxLength).then(result => new Uint8Array(result.data.buffer));
-  return Emval.toHandle(promise);
-});
+EM_JS(EM_VAL,
+      em_request_descriptor_impl,
+      (EM_VAL deviceHandle, uint16_t value, uint16_t maxLength),
+      {
+        let device = Emval.toValue(deviceHandle);
+        let promise = device
+                          .controlTransferIn({
+                            requestType : 'standard',
+                            recipient : 'device',
+                            request : /* LIBUSB_REQUEST_GET_DESCRIPTOR */ 6,
+                            value,
+                            index : 0
+                          },
+                                             maxLength)
+                          .then(result = > new Uint8Array(result.data.buffer));
+        return Emval.toHandle(promise);
+      });
 
-static inline val em_request_descriptor(val& device, uint8_t desc_type, uint8_t desc_index, uint16_t max_length) {
-  return val::take_ownership(em_request_descriptor_impl(device.as_handle(), ((uint16_t) desc_type << 8) | desc_index, max_length)).await();
+static inline val em_request_descriptor(val& device,
+                                        uint8_t desc_type,
+                                        uint8_t desc_index,
+                                        uint16_t max_length) {
+  return val::take_ownership(
+             em_request_descriptor_impl(device.as_handle(),
+                                        ((uint16_t)desc_type << 8) | desc_index,
+                                        max_length))
+      .await();
 }
 
 int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
@@ -224,16 +237,20 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
 
       web_usb_device.call<val>("open").await();
 
-      val device_descriptor = em_request_descriptor(web_usb_device, LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE);
-      val(typed_memory_view(LIBUSB_DT_DEVICE_SIZE, (uint8_t *)&dev->device_descriptor))
+      val device_descriptor = em_request_descriptor(
+          web_usb_device, LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE);
+      val(typed_memory_view(LIBUSB_DT_DEVICE_SIZE,
+                            (uint8_t*)&dev->device_descriptor))
           .call<void>("set", device_descriptor);
 
       std::vector<std::vector<uint8_t>> configurations;
       auto configurations_len = dev->device_descriptor.bNumConfigurations;
       configurations.reserve(configurations_len);
       for (uint8_t j = 0; j < configurations_len; j++) {
-        auto config_descriptor = em_request_descriptor(web_usb_device, LIBUSB_DT_CONFIG, j, UINT16_MAX);
-        configurations.push_back(convertJSArrayToNumberVector<uint8_t>(config_descriptor));
+        auto config_descriptor = em_request_descriptor(
+            web_usb_device, LIBUSB_DT_CONFIG, j, UINT16_MAX);
+        configurations.push_back(
+            convertJSArrayToNumberVector<uint8_t>(config_descriptor));
       }
 
       web_usb_device.call<val>("close").await();
@@ -243,9 +260,9 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
         continue;
       }
 
-      WebUsbDevicePtr(dev).init_to(CachedDevice {
-        .device = std::move(web_usb_device),
-        .configurations = std::move(configurations),
+      WebUsbDevicePtr(dev).init_to(CachedDevice{
+          .device = std::move(web_usb_device),
+          .configurations = std::move(configurations),
       });
     }
     *devs = discovered_devs_append(*devs, dev);
@@ -266,7 +283,10 @@ void em_close(libusb_device_handle* handle) {
   promise_result::await(web_usb_device.call<val>("close"));
 }
 
-int em_get_config_descriptor_impl(CachedDevice &dev, uint8_t config_id, void* buf, size_t len) {
+int em_get_config_descriptor_impl(CachedDevice& dev,
+                                  uint8_t config_id,
+                                  void* buf,
+                                  size_t len) {
   auto& config = dev.configurations[config_id];
   len = std::min(len, config.size());
   memcpy(buf, config.data(), len);
@@ -279,7 +299,9 @@ int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
   if (web_usb_config.isNull()) {
     return LIBUSB_ERROR_NOT_FOUND;
   }
-  return em_get_config_descriptor_impl(cached_device, web_usb_config["configurationValue"].as<uint8_t>(), buf, len);
+  return em_get_config_descriptor_impl(
+      cached_device, web_usb_config["configurationValue"].as<uint8_t>(), buf,
+      len);
 }
 
 int em_get_config_descriptor(libusb_device* dev,
