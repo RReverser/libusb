@@ -151,7 +151,16 @@ struct ValPtr {
   void init_to(T&& value) { new (ptr) val(std::move(value)); }
 
   T& get() { return *ptr; }
-  T take() { return std::move(get()); }
+
+  void free() {
+    get().~T();
+  }
+
+  T take() {
+    auto value = std::move(get());
+    free();
+    return value;
+  }
 
  protected:
   ValPtr(void* ptr) : ptr(static_cast<T*>(ptr)) {}
@@ -355,7 +364,7 @@ int em_reset_device(libusb_device_handle* handle) {
 }
 
 void em_destroy_device(libusb_device* dev) {
-  WebUsbDevicePtr(dev).take();
+  WebUsbDevicePtr(dev).free();
 }
 
 thread_local const val Uint8Array = val::global("Uint8Array");
@@ -453,7 +462,7 @@ int em_submit_transfer(usbi_transfer* itransfer) {
 }
 
 void em_clear_transfer_priv(usbi_transfer* itransfer) {
-  WebUsbTransferPtr(itransfer).take();
+  WebUsbTransferPtr(itransfer).free();
 }
 
 int em_cancel_transfer(usbi_transfer* itransfer) {
