@@ -22,6 +22,7 @@
 #include <emscripten.h>
 #include <emscripten/val.h>
 #include <emscripten/proxying.h>
+#include <emscripten/threading.h>
 #include <assert.h>
 #include <type_traits>
 #include <utility>
@@ -612,16 +613,14 @@ int em_handle_transfer_completion(usbi_transfer *itransfer) {
 
 static ProxyingQueue queue;
 
-static pthread_t emscripten_main_thread = pthread_self();
-
 template<typename Fn, Fn fn, typename... Args>
 void
 proxiedVoid(Args... args) {
-  if (emscripten_main_thread == pthread_self()) {
+  if (emscripten_is_main_runtime_thread()) {
     return fn(std::forward<Args>(args)...);
   }
   // TODO: proxy to the thread that initialized libusb instead?
-  assert(queue.proxySync(emscripten_main_thread, [&] {
+  assert(queue.proxySync(emscripten_main_runtime_thread_id(), [&] {
     fn(std::forward<Args>(args)...);
   }));
 }
@@ -629,11 +628,11 @@ proxiedVoid(Args... args) {
 template<typename Fn, Fn fn, typename... Args>
 typename std::invoke_result_t<Fn, Args...>
 proxied(Args... args) {
-  if (emscripten_main_thread == pthread_self()) {
+  if (emscripten_is_main_runtime_thread()) {
     return fn(std::forward<Args>(args)...);
   }
   std::invoke_result_t<Fn, Args...> result;
-  assert(queue.proxySync(emscripten_main_thread, [&] {
+  assert(queue.proxySync(emscripten_main_runtime_thread_id(), [&] {
     result = fn(std::forward<Args>(args)...);
   }));
   return result;
