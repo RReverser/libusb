@@ -83,10 +83,17 @@ case $host in
 	backend=haiku
 	platform=posix
 	;;
-wasm32-**)
+*-emscripten)
 	AC_MSG_RESULT([Emscripten])
 	backend=emscripten
 	platform=posix
+	;;
+wasm32*)
+	AC_MSG_ERROR([
+--host=wasm32 used to be recommended and assumed Emscripten backend.
+This is no longer accepted as we might add more WebAssembly backends in the future.
+Please use an explicit --host=wasm32-unknown-emscripten instead.
+	])
 	;;
 *-linux* | *-uclinux*)
 	dnl on Android Linux, some functions are in different places
@@ -229,7 +236,9 @@ windows)
 emscripten)
 	AC_SUBST(EXEEXT, [.html])
 	# Note: LT_LDFLAGS is not enough here because we need link flags for executable.
-	AM_LDFLAGS="${AM_LDFLAGS} --bind -s ASYNCIFY -s ASSERTIONS -s ALLOW_MEMORY_GROWTH -s INVOKE_RUN=0 -s EXPORTED_RUNTIME_METHODS=['callMain']"
+	EM_LDFLAGS="--bind -s ASYNCIFY"
+	AM_LDFLAGS="${AM_LDFLAGS} ${EM_LDFLAGS} -s ASSERTIONS -s ALLOW_MEMORY_GROWTH -s INVOKE_RUN=0 -s EXPORTED_RUNTIME_METHODS=['callMain']"
+	LIBS="${LIBS} ${EM_LDFLAGS}"
 	;;
 *)
 	dnl no special handling required
