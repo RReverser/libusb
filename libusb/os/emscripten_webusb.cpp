@@ -227,9 +227,11 @@ int em_open(libusb_device_handle *handle) {
 }
 
 void em_close(libusb_device_handle *handle) {
-  // LibUSB API doesn't allow us to handle an error here, so ignore the Promise
-  // altogether.
-  return get_web_usb_device(handle->dev).call<void>("close");
+  auto web_usb_device = get_web_usb_device(handle->dev);
+  // LibUSB API doesn't allow us to handle an error here, but we still need to wait
+  // for the promise to make sure that subsequent attempt to reopen the same device
+  // doesn't fail with a "device busy" error.
+  promise_result::await(web_usb_device.call<val>("close"));
 }
 
 int em_get_config_descriptor_impl(val &&web_usb_config, void *buf, size_t len) {
