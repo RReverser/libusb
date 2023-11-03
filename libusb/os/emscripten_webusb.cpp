@@ -291,7 +291,7 @@ struct CachedDevice {
     }
 
     // Infer the device speed (which is not yet provided by WebUSB) from the descriptor.
-    if (dev->device_descriptor.bMaxPacketSize0 == 9) {
+    if (dev->device_descriptor.bMaxPacketSize0 == /* actually means 2^9, only valid for superspeeds */ 9) {
       dev->speed = dev->device_descriptor.bcdUSB >= 0x0310 ? LIBUSB_SPEED_SUPER_PLUS : LIBUSB_SPEED_SUPER;
     } else if (dev->device_descriptor.bcdUSB >= 0x0200) {
       dev->speed = LIBUSB_SPEED_HIGH;
