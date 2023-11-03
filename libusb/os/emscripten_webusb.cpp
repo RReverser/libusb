@@ -119,14 +119,17 @@ val em_promise_catch(const val& promise) {
 }
 
 template <typename OnFulfilled>
-val em_promise_then(const val& promise, OnFulfilled on_fulfilled) {
+val em_promise_then(const val& promise, OnFulfilled&& on_fulfilled) {
   assert(emscripten_is_main_runtime_thread());
+  // move lambda to heap as it will be called when current stack is already unwound
+  auto on_fulfilled_ptr = new OnFulfilled(std::move(on_fulfilled));
   return val::take_ownership(em_promise_then_impl(
       promise.as_handle(),
       [](EM_VAL result, void* arg) {
-        (*(OnFulfilled*)arg)(val::take_ownership(result));
+        std::unique_ptr<OnFulfilled> on_fulfilled((OnFulfilled*)arg);
+        (*on_fulfilled)(val::take_ownership(result));
       },
-      &on_fulfilled));
+      on_fulfilled_ptr));
 }
 
 static ProxyingQueue queue;
@@ -154,7 +157,8 @@ val awaitOnMain(Func&& func) {
   // multiple threads might be fighting for its state; instead, use proxying
   // to synchronously block the current thread until the promise is complete.
   val result;
-  queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&](auto ctx) mutable {
+  queue.proxySyncWithCtx(
+      emscripten_main_runtime_thread_id(), [&](auto ctx) mutable {
     em_promise_then(func(), [&result, ctx = std::move(ctx)](val&& value) mutable {
       result = std::move(value);
       ctx.finish();
@@ -169,7 +173,7 @@ struct promise_result {
   libusb_error error;
   val value;
 
-  promise_result(): error(LIBUSB_ERROR_OTHER) {}
+  promise_result() : error(LIBUSB_ERROR_OTHER) {}
 
   promise_result(val&& result)
       : error(static_cast<libusb_error>(result["error"].as<int>())),
@@ -195,7 +199,7 @@ struct promise_result {
 template <typename T>
 struct ValPtr {
  public:
-  void init_to(T&& value) { new (ptr) val(std::move(value)); }
+  void init_to(T&& value) { new (ptr) T(std::move(value)); }
 
   T& get() { return *ptr; }
 
@@ -266,7 +270,8 @@ struct CachedDevice {
     auto configurations_len = dev->device_descriptor.bNumConfigurations;
     configurations.reserve(configurations_len);
     for (uint8_t j = 0; j < configurations_len; j++) {
-      auto result = requestDescriptor(LIBUSB_DT_CONFIG, j, UINT16_MAX);
+      auto result = requestDescriptor(LIBUSB_DT_CONFIG, j,
+                                      /* MAX_CTRL_BUFFER_LENGTH */ 4096);
       if (result.error) {
         usbi_err(ctx, "failed to get config descriptor %i: %s", j,
                  libusb_error_name(result.error));
@@ -281,7 +286,7 @@ struct CachedDevice {
     return true;
   }
 
-  uint8_t getActiveConfigId() {
+  uint8_t getActiveConfigValue() {
     return runOnMain([&]() {
       auto web_usb_config = device["configuration"];
       return web_usb_config.isNull()
@@ -290,13 +295,32 @@ struct CachedDevice {
     });
   }
 
-  int getConfigDescriptor(uint8_t config_id, void* buf, size_t len) {
-    for (auto& config : configurations) {
-      auto config_descriptor = (libusb_config_descriptor*)config.data();
+  int getConfigDescriptor(uint8_t config_id, void** buf) {
+    if (config_id > configurations.size()) {
+      return LIBUSB_ERROR_NOT_FOUND;
+    }
+    auto& config = configurations[config_id];
+    *buf = config.data();
+    return config.size();
+  }
+
+  int getConfigDescriptor(uint8_t config_id, void* buf, size_t buf_len) {
+    void* src;
+    int src_len = getConfigDescriptor(config_id, &src);
+    if (src_len < 0) {
+      return src_len;
+    }
+    auto len = std::min((int)buf_len, src_len);
+    memcpy(buf, src, len);
+    return len;
+  }
+
+  int findConfigDescriptorByValue(uint8_t config_id) {
+    for (size_t i = 0; i < configurations.size(); i++) {
+      auto config_descriptor =
+          (libusb_config_descriptor*)configurations[i].data();
       if (config_descriptor->bConfigurationValue == config_id) {
-        len = std::min(len, config.size());
-        memcpy(buf, config.data(), len);
-        return len;
+        return i;
       }
     }
     return LIBUSB_ERROR_NOT_FOUND;
@@ -408,20 +432,36 @@ void em_close(libusb_device_handle* handle) {
 
 int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
   auto& cached_device = WebUsbDevicePtr(dev).get();
-  return cached_device.getConfigDescriptor(cached_device.getActiveConfigId(),
-                                           buf, len);
+  auto config_value = cached_device.getActiveConfigValue();
+  auto config_id = cached_device.findConfigDescriptorByValue(config_value);
+  if (config_id < 0) {
+    return config_id;
+  }
+  return cached_device.getConfigDescriptor(config_id, buf, len);
 }
 
 int em_get_config_descriptor(libusb_device* dev,
-                             uint8_t idx,
+                             uint8_t config_id,
                              void* buf,
                              size_t len) {
-  return WebUsbDevicePtr(dev).get().getConfigDescriptor(idx, buf, len);
+  return WebUsbDevicePtr(dev).get().getConfigDescriptor(config_id, buf, len);
 }
 
-int em_get_configuration(libusb_device_handle* dev_handle, uint8_t* config) {
-  *config = WebUsbDevicePtr(dev_handle).get().getActiveConfigId();
+int em_get_configuration(libusb_device_handle* dev_handle,
+                         uint8_t* config_value) {
+  *config_value = WebUsbDevicePtr(dev_handle).get().getActiveConfigValue();
   return LIBUSB_SUCCESS;
+}
+
+int em_get_config_descriptor_by_value(libusb_device* dev,
+                                      uint8_t config_value,
+                                      void** buf) {
+  auto& cached_device = WebUsbDevicePtr(dev).get();
+  auto config_id = cached_device.findConfigDescriptorByValue(config_value);
+  if (config_id < 0) {
+    return config_id;
+  }
+  return cached_device.getConfigDescriptor(config_id, buf);
 }
 
 int em_set_configuration(libusb_device_handle* dev_handle, int config) {
@@ -646,6 +686,7 @@ extern "C" const usbi_os_backend usbi_backend = {
     .close = em_close,
     .get_active_config_descriptor = em_get_active_config_descriptor,
     .get_config_descriptor = em_get_config_descriptor,
+    .get_config_descriptor_by_value = em_get_config_descriptor_by_value,
     .get_configuration = em_get_configuration,
     .set_configuration = em_set_configuration,
     .claim_interface = em_claim_interface,
