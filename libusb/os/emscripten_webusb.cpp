@@ -91,6 +91,23 @@ typedef void (*PromiseCalback)(EM_VAL result, void* arg);
     });
     return Emval.toHandle(promise);
   });
+
+  EM_JS(EM_VAL, em_request_descriptor_impl, (EM_VAL deviceHandle, uint16_t value, uint16_t maxLength), {
+    let device = Emval.toValue(deviceHandle);
+    let promise = device
+      .controlTransferIn(
+        {
+          requestType: "standard",
+          recipient: "device",
+          request: /* LIBUSB_REQUEST_GET_DESCRIPTOR */ 6,
+          value,
+          index: 0,
+        },
+        maxLength,
+      )
+      .then((result) => new Uint8Array(result.data.buffer));
+    return Emval.toHandle(promise);
+  });
 // clang-format on
 
 val em_promise_catch(val&& promise) {
@@ -165,24 +182,6 @@ struct WebUsbTransferPtr : ValPtr<val> {
 
 // Store the global `navigator.usb` once upon initialisation.
 thread_local const val web_usb = val::global("navigator")["usb"];
-
-EM_JS(EM_VAL,
-      em_request_descriptor_impl,
-      (EM_VAL deviceHandle, uint16_t value, uint16_t maxLength),
-      {
-        let device = Emval.toValue(deviceHandle);
-        let promise = device
-                          .controlTransferIn({
-                            requestType : 'standard',
-                            recipient : 'device',
-                            request : /* LIBUSB_REQUEST_GET_DESCRIPTOR */ 6,
-                            value,
-                            index : 0
-                          },
-                                             maxLength)
-                          .then(result = > new Uint8Array(result.data.buffer));
-        return Emval.toHandle(promise);
-      });
 
 static inline val em_request_descriptor(val& device,
                                         uint8_t desc_type,
