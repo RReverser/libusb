@@ -612,11 +612,7 @@ int em_handle_transfer_completion(usbi_transfer *itransfer) {
 
 static ProxyingQueue queue;
 
-static pthread_t emscripten_main_thread;
-
-__attribute__((constructor)) static void init() {
-  emscripten_main_thread = pthread_self();
-}
+static pthread_t emscripten_main_thread = pthread_self();
 
 template<typename Fn, Fn fn, typename... Args>
 void
