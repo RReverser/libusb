@@ -220,10 +220,8 @@ struct promise_result {
   }
 
   ~promise_result() {
-    if (!value.isUndefined()) {
-      // make sure value is freed on the thread it exists on
-      runOnMain([value = std::move(value)]() mutable {});
-    }
+    // make sure value is freed on the thread it exists on
+    runOnMain([value = std::move(value)]() mutable {});
   }
 };
 
@@ -362,9 +360,7 @@ struct CachedDevice {
   }
 
   ~CachedDevice() {
-    if (!device.isUndefined()) {
-      runOnMain([device = std::move(device)]() mutable {});
-    }
+    runOnMain([device = std::move(device)]() mutable {});
   }
 
  private:
