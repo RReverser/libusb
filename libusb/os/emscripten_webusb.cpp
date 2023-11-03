@@ -250,64 +250,68 @@ int em_get_config_descriptor_impl(val &&web_usb_config, void *buf, size_t len) {
       .bMaxPower = 0,  // yolo
   };
   buf = static_cast<uint8_t *>(buf) + LIBUSB_DT_CONFIG_SIZE;
-  for (uint8_t i = 0; i < num_interfaces; i++) {
-    auto web_usb_interface = web_usb_interfaces[i];
-    // TODO: update to `web_usb_interface["alternate"]` once
-    // fix for https://bugs.chromium.org/p/chromium/issues/detail?id=1093502 is
-    // stable.
-    auto web_usb_alternate = web_usb_interface["alternates"][0];
-    auto web_usb_endpoints = web_usb_alternate["endpoints"];
-    auto num_endpoints = web_usb_endpoints["length"].as<uint8_t>();
-    config->wTotalLength +=
-        LIBUSB_DT_INTERFACE_SIZE + num_endpoints * LIBUSB_DT_ENDPOINT_SIZE;
-    if (config->wTotalLength > len) {
-      continue;
-    }
-    auto interface = static_cast<usbi_interface_descriptor *>(buf);
-    *interface = {
-        .bLength = LIBUSB_DT_INTERFACE_SIZE,
-        .bDescriptorType = LIBUSB_DT_INTERFACE,
-        .bInterfaceNumber = web_usb_interface["interfaceNumber"].as<uint8_t>(),
-        .bAlternateSetting =
-            web_usb_alternate["alternateSetting"].as<uint8_t>(),
-        .bNumEndpoints = web_usb_endpoints["length"].as<uint8_t>(),
-        .bInterfaceClass = web_usb_alternate["interfaceClass"].as<uint8_t>(),
-        .bInterfaceSubClass =
-            web_usb_alternate["interfaceSubclass"].as<uint8_t>(),
-        .bInterfaceProtocol =
-            web_usb_alternate["interfaceProtocol"].as<uint8_t>(),
-        .iInterface = 0,  // Not exposed in WebUSB, don't assign any string.
-    };
-    buf = static_cast<uint8_t *>(buf) + LIBUSB_DT_INTERFACE_SIZE;
-    for (uint8_t j = 0; j < num_endpoints; j++) {
-      auto web_usb_endpoint = web_usb_endpoints[j];
-      auto endpoint = static_cast<libusb_endpoint_descriptor *>(buf);
-
-      auto web_usb_endpoint_type = web_usb_endpoint["type"].as<std::string>();
-      auto transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_CONTROL;
-
-      if (web_usb_endpoint_type == "bulk") {
-        transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
-      } else if (web_usb_endpoint_type == "interrupt") {
-        transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_INTERRUPT;
-      } else if (web_usb_endpoint_type == "isochronous") {
-        transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_ISOCHRONOUS;
+  for (uint8_t interface_idx = 0; interface_idx < num_interfaces; interface_idx++) {
+    auto web_usb_interface = web_usb_interfaces[interface_idx];
+    auto web_usb_alternates = web_usb_interface["alternates"];
+    auto num_alternates = web_usb_alternates["length"].as<uint8_t>();
+    for (uint8_t alternate_idx = 0; alternate_idx < num_alternates; alternate_idx++) {
+      auto web_usb_alternate = web_usb_alternates[alternate_idx];
+      auto web_usb_endpoints = web_usb_alternate["endpoints"];
+      auto num_endpoints = web_usb_endpoints["length"].as<uint8_t>();
+      config->wTotalLength +=
+          LIBUSB_DT_INTERFACE_SIZE + num_endpoints * LIBUSB_DT_ENDPOINT_SIZE;
+      if (config->wTotalLength > len) {
+        // If we don't have enough space in the buffer, we must still fill `wTotalLength`
+        // to the total amount we'd need for entire contents, as this is the size
+        // libusb will use to allocate a larger buffer when making a 2nd attempt to call this function.
+        continue;
       }
+      auto interface = static_cast<usbi_interface_descriptor *>(buf);
+      *interface = {
+          .bLength = LIBUSB_DT_INTERFACE_SIZE,
+          .bDescriptorType = LIBUSB_DT_INTERFACE,
+          .bInterfaceNumber = web_usb_interface["interfaceNumber"].as<uint8_t>(),
+          .bAlternateSetting =
+              web_usb_alternate["alternateSetting"].as<uint8_t>(),
+          .bNumEndpoints = web_usb_endpoints["length"].as<uint8_t>(),
+          .bInterfaceClass = web_usb_alternate["interfaceClass"].as<uint8_t>(),
+          .bInterfaceSubClass =
+              web_usb_alternate["interfaceSubclass"].as<uint8_t>(),
+          .bInterfaceProtocol =
+              web_usb_alternate["interfaceProtocol"].as<uint8_t>(),
+          .iInterface = 0,  // Not exposed in WebUSB, don't assign any string.
+      };
+      buf = static_cast<uint8_t *>(buf) + LIBUSB_DT_INTERFACE_SIZE;
+      for (uint8_t endpoint_idx = 0; endpoint_idx < num_endpoints; endpoint_idx++) {
+        auto web_usb_endpoint = web_usb_endpoints[endpoint_idx];
+        auto endpoint = static_cast<libusb_endpoint_descriptor *>(buf);
 
-      // Can't use struct-init syntax here because there is no
-      // `usbi_endpoint_descriptor` unlike for other descriptors, so we use
-      // `libusb_endpoint_descriptor` instead which has extra libusb-specific
-      // fields and might overflow the provided buffer.
-      endpoint->bLength = LIBUSB_DT_ENDPOINT_SIZE;
-      endpoint->bDescriptorType = LIBUSB_DT_ENDPOINT;
-      endpoint->bEndpointAddress =
-          ((web_usb_endpoint["direction"].as<std::string>() == "in") << 7) |
-          web_usb_endpoint["endpointNumber"].as<uint8_t>();
-      endpoint->bmAttributes = transfer_type;
-      endpoint->wMaxPacketSize = web_usb_endpoint["packetSize"].as<uint16_t>();
-      endpoint->bInterval = 1;
+        auto web_usb_endpoint_type = web_usb_endpoint["type"].as<std::string>();
+        auto transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_CONTROL;
 
-      buf = static_cast<uint8_t *>(buf) + LIBUSB_DT_ENDPOINT_SIZE;
+        if (web_usb_endpoint_type == "bulk") {
+          transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_BULK;
+        } else if (web_usb_endpoint_type == "interrupt") {
+          transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_INTERRUPT;
+        } else if (web_usb_endpoint_type == "isochronous") {
+          transfer_type = LIBUSB_ENDPOINT_TRANSFER_TYPE_ISOCHRONOUS;
+        }
+
+        // Can't use struct-init syntax here because there is no
+        // `usbi_endpoint_descriptor` unlike for other descriptors, so we use
+        // `libusb_endpoint_descriptor` instead which has extra libusb-specific
+        // fields and might overflow the provided buffer.
+        endpoint->bLength = LIBUSB_DT_ENDPOINT_SIZE;
+        endpoint->bDescriptorType = LIBUSB_DT_ENDPOINT;
+        endpoint->bEndpointAddress =
+            ((web_usb_endpoint["direction"].as<std::string>() == "in") << 7) |
+            web_usb_endpoint["endpointNumber"].as<uint8_t>();
+        endpoint->bmAttributes = transfer_type;
+        endpoint->wMaxPacketSize = web_usb_endpoint["packetSize"].as<uint16_t>();
+        endpoint->bInterval = 1;
+
+        buf = static_cast<uint8_t *>(buf) + LIBUSB_DT_ENDPOINT_SIZE;
+      }
     }
   }
   return static_cast<uint8_t *>(buf) - buf_start;
