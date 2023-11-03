@@ -628,13 +628,11 @@ proxiedVoid(Args... args) {
 template<typename Fn, Fn fn, typename... Args>
 typename std::invoke_result_t<Fn, Args...>
 proxied(Args... args) {
-  if (emscripten_is_main_runtime_thread()) {
-    return fn(std::forward<Args>(args)...);
-  }
   std::invoke_result_t<Fn, Args...> result;
-  assert(queue.proxySync(emscripten_main_runtime_thread_id(), [&] {
-    result = fn(std::forward<Args>(args)...);
-  }));
+  auto func = [](auto result, Args... args) {
+    *result = fn(std::forward<Args>(args)...);
+  };
+  proxiedVoid<decltype(func), func>(&result, std::forward<Args>(args)...);
   return result;
 }
 
