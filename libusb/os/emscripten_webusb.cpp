@@ -290,6 +290,17 @@ struct CachedDevice {
       });
     }
 
+    // Infer the device speed (which is not yet provided by WebUSB) from the descriptor.
+    if (dev->device_descriptor.bMaxPacketSize0 == 9) {
+      dev->speed = dev->device_descriptor.bcdUSB >= 0x0310 ? LIBUSB_SPEED_SUPER_PLUS : LIBUSB_SPEED_SUPER;
+    } else if (dev->device_descriptor.bcdUSB >= 0x0200) {
+      dev->speed = LIBUSB_SPEED_HIGH;
+    } else if (dev->device_descriptor.bMaxPacketSize0 > 8) {
+      dev->speed = LIBUSB_SPEED_FULL;
+    } else {
+      dev->speed = LIBUSB_SPEED_LOW;
+    }
+
     if (usbi_sanitize_device(dev) < 0) {
       return false;
     }
