@@ -482,60 +482,40 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
 
   libusb_transfer_status status = LIBUSB_TRANSFER_ERROR;
 
-  // If this was a LIBUSB_DT_STRING request, then the value will be a string
-  // handle instead of a promise.
-  if (result_val.isString()) {
-    int written = EM_ASM_INT(
-        {
-          // There's no good way to get UTF-16 output directly from JS string,
-          // so again reach out to internals via JS snippet.
-          return stringToUTF16(Emval.toValue($0), $1, $2);
-        },
-        result_val.as_handle(),
-        transfer->buffer + LIBUSB_CONTROL_SETUP_SIZE + 2,
-        transfer->length - LIBUSB_CONTROL_SETUP_SIZE - 2);
-    itransfer->transferred = transfer->buffer[LIBUSB_CONTROL_SETUP_SIZE] =
-        2 + written;
-    transfer->buffer[LIBUSB_CONTROL_SETUP_SIZE + 1] = LIBUSB_DT_STRING;
-    status = LIBUSB_TRANSFER_COMPLETED;
-  } else {
-    // Otherwise we should have a `{value, error}` object by now (see
-    // `em_start_transfer_impl` callback).
-    promise_result result(std::move(result_val));
+  // We should have a `{value, error}` object by now (see
+  // `em_start_transfer_impl` callback).
+  promise_result result(std::move(result_val));
 
-    if (!result.error) {
-      auto web_usb_transfer_status = result.value["status"].as<std::string>();
-      if (web_usb_transfer_status == "ok") {
-        status = LIBUSB_TRANSFER_COMPLETED;
-      } else if (web_usb_transfer_status == "stall") {
-        status = LIBUSB_TRANSFER_STALL;
-      } else if (web_usb_transfer_status == "babble") {
-        status = LIBUSB_TRANSFER_OVERFLOW;
+  if (!result.error) {
+    auto web_usb_transfer_status = result.value["status"].as<std::string>();
+    if (web_usb_transfer_status == "ok") {
+      status = LIBUSB_TRANSFER_COMPLETED;
+    } else if (web_usb_transfer_status == "stall") {
+      status = LIBUSB_TRANSFER_STALL;
+    } else if (web_usb_transfer_status == "babble") {
+      status = LIBUSB_TRANSFER_OVERFLOW;
+    }
+
+    int skip;
+    unsigned char endpointDir;
+
+    if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL) {
+      skip = LIBUSB_CONTROL_SETUP_SIZE;
+      endpointDir = libusb_control_transfer_get_setup(transfer)->bmRequestType;
+    } else {
+      skip = 0;
+      endpointDir = transfer->endpoint;
+    }
+
+    if (endpointDir & LIBUSB_ENDPOINT_IN) {
+      auto data = result.value["data"];
+      if (!data.isNull()) {
+        itransfer->transferred = data["byteLength"].as<int>();
+        val(typed_memory_view(transfer->length - skip, transfer->buffer + skip))
+            .call<void>("set", Uint8Array.new_(data["buffer"]));
       }
-
-      int skip;
-      unsigned char endpointDir;
-
-      if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL) {
-        skip = LIBUSB_CONTROL_SETUP_SIZE;
-        endpointDir =
-            libusb_control_transfer_get_setup(transfer)->bmRequestType;
-      } else {
-        skip = 0;
-        endpointDir = transfer->endpoint;
-      }
-
-      if (endpointDir & LIBUSB_ENDPOINT_IN) {
-        auto data = result.value["data"];
-        if (!data.isNull()) {
-          itransfer->transferred = data["byteLength"].as<int>();
-          val(typed_memory_view(transfer->length - skip,
-                                transfer->buffer + skip))
-              .call<void>("set", Uint8Array.new_(data["buffer"]));
-        }
-      } else {
-        itransfer->transferred = result.value["bytesWritten"].as<int>();
-      }
+    } else {
+      itransfer->transferred = result.value["bytesWritten"].as<int>();
     }
   }
 
