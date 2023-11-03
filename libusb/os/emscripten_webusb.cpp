@@ -121,7 +121,8 @@ val em_promise_catch(const val& promise) {
 template <typename OnFulfilled>
 val em_promise_then(const val& promise, OnFulfilled&& on_fulfilled) {
   assert(emscripten_is_main_runtime_thread());
-  // move lambda to heap as it will be called when current stack is already unwound
+  // move lambda to heap as it will be called when current stack is already
+  // unwound
   auto on_fulfilled_ptr = new OnFulfilled(std::move(on_fulfilled));
   return val::take_ownership(em_promise_then_impl(
       promise.as_handle(),
@@ -143,8 +144,10 @@ auto runOnMain(Func&& func) {
     queue.proxySync(emscripten_main_runtime_thread_id(), func);
   } else {
     std::optional<std::invoke_result_t<Func>> result;
-    runOnMain([&result, func = std::move(func)]() { result.emplace(func()); });
-    return result.value();
+    runOnMain([&result, func = std::move(func)]() mutable {
+      result.emplace(func());
+    });
+    return std::move(result.value());
   }
 }
 
@@ -159,11 +162,12 @@ val awaitOnMain(Func&& func) {
   val result;
   queue.proxySyncWithCtx(
       emscripten_main_runtime_thread_id(), [&](auto ctx) mutable {
-    em_promise_then(func(), [&result, ctx = std::move(ctx)](val&& value) mutable {
-      result = std::move(value);
-      ctx.finish();
-    });
-  });
+        em_promise_then(func(),
+                        [&result, ctx = std::move(ctx)](val&& value) mutable {
+                          result = std::move(value);
+                          ctx.finish();
+                        });
+      });
   return result;
 }
 
