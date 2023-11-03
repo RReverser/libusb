@@ -77,12 +77,30 @@ namespace {
     );
     return Emval.toHandle(promise);
 	});
+
+  EM_JS(EM_VAL, em_promise_then_impl, (EM_VAL handle, void(*on_fulfilled)(EM_VAL result, void *arg), void *arg), {
+    let promise = Emval.toValue(handle);
+    promise = promise.then(result => {
+      {{{ makeDynCall('vip', 'on_fulfilled') }}}(Emval.toHandle(result), arg);
+    });
+    return Emval.toHandle(promise);
+  });
 // clang-format on
 
 val em_promise_catch(val&& promise) {
   EM_VAL handle = promise.as_handle();
   handle = em_promise_catch_impl(handle);
   return val::take_ownership(handle);
+}
+
+template <typename OnFulfilled>
+val em_promise_then(val&& promise, OnFulfilled on_fulfilled) {
+  return val::take_ownership(em_promise_then_impl(
+      promise.as_handle(),
+      [](EM_VAL result, void* arg) {
+        (*(OnFulfilled*)arg)(val::take_ownership(result));
+      },
+      &on_fulfilled));
 }
 
 // C++ struct representation for {value, error} object from above
@@ -403,29 +421,11 @@ void em_destroy_device(libusb_device* dev) {
 
 thread_local const val Uint8Array = val::global("Uint8Array");
 
-EMSCRIPTEN_KEEPALIVE
-extern "C" void em_signal_transfer_completion(usbi_transfer* itransfer,
-                                              EM_VAL result_handle) {
-  em_signal_transfer_completion_impl(itransfer,
-                                     val::take_ownership(result_handle));
-}
-
-// clang-format off
-EM_JS(void, em_start_transfer_impl, (usbi_transfer *transfer, EM_VAL handle), {
-  // Right now the handle value should be a `Promise<{value, error}>`.
-  // Subscribe to its result to unwrap the promise to `{value, error}`
-  // and signal transfer completion.
-  // Catch the error to transform promise of `value` into promise of `{value,
-  // error}`.
-  Emval.toValue(handle).then(result => {
-    _em_signal_transfer_completion(transfer, Emval.toHandle(result));
-  });
-});
-// clang-format on
-
 void em_start_transfer(usbi_transfer* itransfer, val&& promise) {
   promise = em_promise_catch(std::move(promise));
-  em_start_transfer_impl(itransfer, promise.as_handle());
+  em_promise_then(std::move(promise), [itransfer](val&& result) {
+    em_signal_transfer_completion_impl(itransfer, std::move(result));
+  });
 }
 
 int em_submit_transfer(usbi_transfer* itransfer) {
