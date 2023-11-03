@@ -37,26 +37,26 @@
  *
  * Therefore use a custom event system based on browser event emitters. */
 #include <emscripten.h>
+#include <emscripten/threading.h>
 
-EM_JS(void, em_libusb_notify, (void), {
-	dispatchEvent(new Event("em-libusb"));
+static int em_libusb_notification_atomic = 0;
+
+EM_JS(void, em_libusb_notify, (int* atomic_ptr), {
+	Atomics.notify(HEAP32, atomic_ptr >> 2);
 });
 
-EM_ASYNC_JS(int, em_libusb_wait, (int timeout), {
-	let onEvent, timeoutId;
+EM_ASYNC_JS(int, em_libusb_wait_async, (int* atomic_ptr, int timeout), {
+	return (await Atomics.waitAsync(HEAP32, atomic_ptr >> 2, 0, timeout).value) === 'ok';
+});
 
-	try {
-		return await new Promise(resolve => {
-			onEvent = () => resolve(0);
-			addEventListener('em-libusb', onEvent);
-
-			timeoutId = setTimeout(resolve, timeout, -1);
-		});
-	} finally {
-		removeEventListener('em-libusb', onEvent);
-		clearTimeout(timeoutId);
+static int em_libusb_wait(int timeout)
+{
+	if (emscripten_is_main_browser_thread()) {
+		return em_libusb_wait_async(&em_libusb_notification_atomic, timeout);
+	} else {
+		return __builtin_wasm_memory_atomic_wait32(&em_libusb_notification_atomic, 0, timeout) == 0;
 	}
-});
+}
 #endif
 #include <unistd.h>
 
@@ -162,7 +162,7 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
-	em_libusb_notify();
+	em_libusb_notify(&em_libusb_notification_atomic);
 #endif
 }
 
@@ -267,8 +267,7 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 		if (num_ready != 0) break;
 		int timeout = until_time - emscripten_get_now();
 		if (timeout <= 0) break;
-		int result = em_libusb_wait(timeout);
-		if (result != 0) break;
+		if (!em_libusb_wait(timeout)) break;
 	}
 #else
 	num_ready = poll(fds, nfds, timeout_ms);
