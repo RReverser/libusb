@@ -137,7 +137,7 @@ struct ValPtr {
   T take() { return std::move(get()); }
 
  protected:
-  ValPtr(T* ptr) : ptr(ptr) {}
+  ValPtr(void* ptr) : ptr(static_cast<T*>(ptr)) {}
 
  private:
   T* ptr;
@@ -150,8 +150,7 @@ struct CachedDevice {
 
 struct WebUsbDevicePtr : ValPtr<CachedDevice> {
  public:
-  WebUsbDevicePtr(libusb_device* dev)
-      : ValPtr(static_cast<CachedDevice*>(usbi_get_device_priv(dev))) {}
+  WebUsbDevicePtr(libusb_device* dev) : ValPtr(usbi_get_device_priv(dev)) {}
 };
 
 val& get_web_usb_device(libusb_device* dev) {
@@ -161,14 +160,8 @@ val& get_web_usb_device(libusb_device* dev) {
 struct WebUsbTransferPtr : ValPtr<val> {
  public:
   WebUsbTransferPtr(usbi_transfer* itransfer)
-      : ValPtr(static_cast<val*>(usbi_get_transfer_priv(itransfer))) {}
+      : ValPtr(usbi_get_transfer_priv(itransfer)) {}
 };
-
-void em_signal_transfer_completion_impl(usbi_transfer* itransfer,
-                                        val&& result) {
-  WebUsbTransferPtr(itransfer).init_to(std::move(result));
-  usbi_signal_transfer_completion(itransfer);
-}
 
 // Store the global `navigator.usb` once upon initialisation.
 thread_local const val web_usb = val::global("navigator")["usb"];
@@ -371,7 +364,8 @@ thread_local const val Uint8Array = val::global("Uint8Array");
 void em_start_transfer(usbi_transfer* itransfer, val&& promise) {
   promise = em_promise_catch(std::move(promise));
   em_promise_then(std::move(promise), [itransfer](val&& result) {
-    em_signal_transfer_completion_impl(itransfer, std::move(result));
+    WebUsbTransferPtr(itransfer).init_to(std::move(result));
+    usbi_signal_transfer_completion(itransfer);
   });
 }
 
