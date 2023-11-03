@@ -21,6 +21,11 @@
 
 #include <emscripten.h>
 #include <emscripten/val.h>
+#include <emscripten/proxying.h>
+#include <assert.h>
+#include <type_traits>
+#include <utility>
+#include <pthread.h>
 
 #include "libusbi.h"
 
@@ -603,30 +608,63 @@ int em_handle_transfer_completion(usbi_transfer *itransfer) {
   return usbi_handle_transfer_completion(itransfer, status);
 }
 }  // namespace
+#pragma clang diagnostic pop
 
-extern "C" {
-const usbi_os_backend usbi_backend = {
+static ProxyingQueue queue;
+
+static pthread_t emscripten_main_thread;
+
+__attribute__((constructor)) static void init() {
+  emscripten_main_thread = pthread_self();
+}
+
+template<typename Fn, Fn fn, typename... Args>
+void
+proxiedVoid(Args... args) {
+  if (emscripten_main_thread == pthread_self()) {
+    return fn(std::forward<Args>(args)...);
+  }
+  // TODO: proxy to the thread that initialized libusb instead?
+  assert(queue.proxySync(emscripten_main_thread, [&] {
+    fn(std::forward<Args>(args)...);
+  }));
+}
+
+template<typename Fn, Fn fn, typename... Args>
+typename std::invoke_result_t<Fn, Args...>
+proxied(Args... args) {
+  if (emscripten_main_thread == pthread_self()) {
+    return fn(std::forward<Args>(args)...);
+  }
+  std::invoke_result_t<Fn, Args...> result;
+  assert(queue.proxySync(emscripten_main_thread, [&] {
+    result = fn(std::forward<Args>(args)...);
+  }));
+  return result;
+}
+
+#define PROXIED(fn) proxied<decltype(&fn), &fn>
+
+extern "C" const usbi_os_backend usbi_backend = {
     .name = "Emscripten + WebUSB backend",
     .caps = LIBUSB_CAP_HAS_CAPABILITY,
-    .get_device_list = em_get_device_list,
-    .open = em_open,
-    .close = em_close,
-    .get_active_config_descriptor = em_get_active_config_descriptor,
-    .get_config_descriptor = em_get_config_descriptor,
-    .get_configuration = em_get_configuration,
-    .set_configuration = em_set_configuration,
-    .claim_interface = em_claim_interface,
-    .release_interface = em_release_interface,
-    .set_interface_altsetting = em_set_interface_altsetting,
-    .clear_halt = em_clear_halt,
-    .reset_device = em_reset_device,
-    .destroy_device = em_destroy_device,
-    .submit_transfer = em_submit_transfer,
-    .cancel_transfer = em_cancel_transfer,
-    .clear_transfer_priv = em_clear_transfer_priv,
-    .handle_transfer_completion = em_handle_transfer_completion,
+    .get_device_list = PROXIED(em_get_device_list),
+    .open = PROXIED(em_open),
+    .close = proxiedVoid<decltype(&em_close), &em_close>,
+    .get_active_config_descriptor = PROXIED(em_get_active_config_descriptor),
+    .get_config_descriptor = PROXIED(em_get_config_descriptor),
+    .get_configuration = PROXIED(em_get_configuration),
+    .set_configuration = PROXIED(em_set_configuration),
+    .claim_interface = PROXIED(em_claim_interface),
+    .release_interface = PROXIED(em_release_interface),
+    .set_interface_altsetting = PROXIED(em_set_interface_altsetting),
+    .clear_halt = PROXIED(em_clear_halt),
+    .reset_device = PROXIED(em_reset_device),
+    .destroy_device = proxiedVoid<decltype(&em_destroy_device), &em_destroy_device>,
+    .submit_transfer = PROXIED(em_submit_transfer),
+    .cancel_transfer = PROXIED(em_cancel_transfer),
+    .clear_transfer_priv = proxiedVoid<decltype(&em_clear_transfer_priv), &em_clear_transfer_priv>,
+    .handle_transfer_completion = PROXIED(em_handle_transfer_completion),
     .device_priv_size = sizeof(val),
     .transfer_priv_size = sizeof(val),
 };
-}
-#pragma clang diagnostic pop
