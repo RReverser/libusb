@@ -179,11 +179,11 @@ val awaitOnMain(Func&& func) {
   // if we're on a different thread, we can't use main thread's Asyncify as
   // multiple threads might be fighting for its state; instead, use proxying
   // to synchronously block the current thread until the promise is complete.
-  val result;
+  std::optional<val> result;
   auto func_one_off = OneOffLambda(
       [&result, func = std::move(func)](em_proxying_ctx* ctx) mutable {
         em_promise_then(func(), [&result, ctx](val&& value) mutable {
-          result = std::move(value);
+          result.emplace(std::move(value));
           emscripten_proxy_finish(ctx);
         });
       });
@@ -193,7 +193,7 @@ val awaitOnMain(Func&& func) {
         (*(decltype(func_one_off)*)arg)(ctx);
       },
       &func_one_off);
-  return result;
+  return std::move(result.value());
 }
 
 // C++ struct representation for {value, error} object from above
@@ -407,10 +407,10 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
   uint8_t devices_num =
       runOnMain([&]() mutable { return web_usb_devices["length"].as<uint8_t>(); });
   for (uint8_t i = 0; i < devices_num; i++) {
-    emscripten::val web_usb_device;
+    std::optional<emscripten::val> web_usb_device_opt;
     unsigned long session_id;
     runOnMain([&]() mutable {
-      web_usb_device = web_usb_devices[i];
+      auto& web_usb_device = web_usb_device_opt.emplace(web_usb_devices[i]);
       auto vendor_id = web_usb_device["vendorId"].as<uint16_t>();
       auto product_id = web_usb_device["productId"].as<uint16_t>();
       // TODO: this has to be a unique ID for the device in libusb structs.
@@ -430,7 +430,7 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
         continue;
       }
 
-      auto cachedDevice = CachedDevice(std::move(web_usb_device));
+      auto cachedDevice = CachedDevice(std::move(web_usb_device_opt.value()));
 
       if (!cachedDevice.initFromDevice(ctx, dev)) {
         libusb_unref_device(dev);
