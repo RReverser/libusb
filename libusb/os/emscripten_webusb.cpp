@@ -142,9 +142,9 @@ auto runOnMain(Func&& func) {
   if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
     queue.proxySync(emscripten_main_runtime_thread_id(), func);
   } else {
-    std::invoke_result_t<Func> result;
-    runOnMain([&]() { result = func(); });
-    return result;
+    std::optional<std::invoke_result_t<Func>> result;
+    runOnMain([&result, func = std::move(func)]() { result.emplace(func()); });
+    return result.value();
   }
 }
 
@@ -173,7 +173,8 @@ struct promise_result {
   libusb_error error;
   val value;
 
-  promise_result() : error(LIBUSB_ERROR_OTHER) {}
+  promise_result() = delete;
+  promise_result(promise_result&&) = default;
 
   promise_result(val&& result)
       : error(static_cast<libusb_error>(result["error"].as<int>())),
@@ -220,8 +221,6 @@ struct ValPtr {
 
 struct CachedDevice {
   CachedDevice() = delete;
-  CachedDevice(const CachedDevice&) = delete;
-  CachedDevice& operator=(const CachedDevice&) = delete;
   CachedDevice(CachedDevice&&) = default;
 
   CachedDevice(val device) : device(std::move(device)) {}
