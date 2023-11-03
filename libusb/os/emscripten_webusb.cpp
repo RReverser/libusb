@@ -419,16 +419,22 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
       runOnMain([&]() mutable { return web_usb_devices["length"].as<uint8_t>(); });
   for (uint8_t i = 0; i < devices_num; i++) {
     std::optional<emscripten::val> web_usb_device_opt;
-    unsigned long session_id;
-    runOnMain([&]() mutable {
+    unsigned long session_id = runOnMain([&]() mutable {
       auto& web_usb_device = web_usb_device_opt.emplace(web_usb_devices[i]);
-      auto vendor_id = web_usb_device["vendorId"].as<uint16_t>();
-      auto product_id = web_usb_device["productId"].as<uint16_t>();
-      // TODO: this has to be a unique ID for the device in libusb structs.
-      // We can't really rely on the index in the list, and otherwise
-      // I can't think of a good way to assign permanent IDs to those
-      // devices, so here goes best-effort attempt...
-      session_id = (vendor_id << 16) | product_id;
+
+      thread_local const val SessionIdSymbol = val::global("Symbol")("libusb.session_id");
+      static unsigned long next_session_id = 0;
+
+      val session_id = web_usb_device[SessionIdSymbol];
+      if (!session_id.isUndefined()) {
+        return session_id.as<unsigned long>();
+      }
+
+      // If the device doesn't have a session ID, it means we haven't seen it before.
+      // Generate a new session ID for it.
+      next_session_id++;
+      web_usb_device.set(SessionIdSymbol, next_session_id);
+      return next_session_id;
     });
     // LibUSB uses that ID to check if this device is already in its own
     // list. As long as there are no two instances of same device
