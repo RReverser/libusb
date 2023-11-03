@@ -222,7 +222,7 @@ struct promise_result {
   ~promise_result() {
     if (!value.isUndefined()) {
       // make sure value is freed on the thread it exists on
-      runOnMain([value = std::move(value)]() {});
+      runOnMain([value = std::move(value)]() mutable {});
     }
   }
 };
@@ -285,7 +285,7 @@ struct CachedDevice {
                  libusb_error_name(result.error));
         return false;
       }
-      runOnMain([device_descriptor = std::move(result.value), dev]() {
+      runOnMain([device_descriptor = std::move(result.value), dev]() mutable {
         val(typed_memory_view(LIBUSB_DT_DEVICE_SIZE,
                               (uint8_t*)&dev->device_descriptor))
             .call<void>("set", device_descriptor);
@@ -307,7 +307,7 @@ struct CachedDevice {
         return false;
       }
       configurations.push_back(
-          runOnMain([config_descriptor = std::move(result.value)]() {
+          runOnMain([config_descriptor = std::move(result.value)]() mutable {
             return convertJSArrayToNumberVector<uint8_t>(config_descriptor);
           }));
     }
@@ -316,7 +316,7 @@ struct CachedDevice {
   }
 
   uint8_t getActiveConfigValue() {
-    return runOnMain([&]() {
+    return runOnMain([&]() mutable {
       auto web_usb_config = device["configuration"];
       return web_usb_config.isNull()
                  ? 0
@@ -358,12 +358,12 @@ struct CachedDevice {
   template <typename... Args>
   promise_result awaitOnMain(Args&&... args) {
     return promise_result::awaitOnMain(
-        [&]() { return device.call<val>(std::forward<Args>(args)...); });
+        [&]() mutable { return device.call<val>(std::forward<Args>(args)...); });
   }
 
   ~CachedDevice() {
     if (!device.isUndefined()) {
-      runOnMain([device = std::move(device)]() {});
+      runOnMain([device = std::move(device)]() mutable {});
     }
   }
 
@@ -374,7 +374,7 @@ struct CachedDevice {
   promise_result requestDescriptor(uint8_t desc_type,
                                    uint8_t desc_index,
                                    uint16_t max_length) {
-    return promise_result::awaitOnMain([=, &device = device]() {
+    return promise_result::awaitOnMain([=, &device = device]() mutable {
       return val::take_ownership(em_request_descriptor_impl(
           device.as_handle(), ((uint16_t)desc_type << 8) | desc_index,
           max_length));
@@ -402,18 +402,18 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
   // in response to user interaction before going to LibUSB.
   // Otherwise this list will be empty.
   auto result = promise_result::awaitOnMain(
-      []() { return val::global("navigator")["usb"].call<val>("getDevices"); });
+      []() mutable { return val::global("navigator")["usb"].call<val>("getDevices"); });
   if (result.error) {
     return result.error;
   }
   auto& web_usb_devices = result.value;
   // Iterate over the exposed devices.
   uint8_t devices_num =
-      runOnMain([&]() { return web_usb_devices["length"].as<uint8_t>(); });
+      runOnMain([&]() mutable { return web_usb_devices["length"].as<uint8_t>(); });
   for (uint8_t i = 0; i < devices_num; i++) {
     emscripten::val web_usb_device;
     unsigned long session_id;
-    runOnMain([&]() {
+    runOnMain([&]() mutable {
       web_usb_device = web_usb_devices[i];
       auto vendor_id = web_usb_device["vendorId"].as<uint16_t>();
       auto product_id = web_usb_device["productId"].as<uint16_t>();
@@ -544,7 +544,7 @@ void em_destroy_device(libusb_device* dev) {
 thread_local const val Uint8Array = val::global("Uint8Array");
 
 int em_submit_transfer(usbi_transfer* itransfer) {
-  return runOnMain([itransfer]() {
+  return runOnMain([itransfer]() mutable {
     auto transfer = USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
     auto& web_usb_device = WebUsbDevicePtr(transfer->dev_handle)
                                .get()
@@ -627,7 +627,7 @@ int em_submit_transfer(usbi_transfer* itransfer) {
         return LIBUSB_ERROR_NOT_SUPPORTED;
     }
     transfer_promise = em_promise_catch(std::move(transfer_promise));
-    em_promise_then(std::move(transfer_promise), [itransfer](val&& result) {
+    em_promise_then(std::move(transfer_promise), [itransfer](val&& result) mutable {
       WebUsbTransferPtr(itransfer).init_to(std::move(result));
       usbi_signal_transfer_completion(itransfer);
     });
@@ -644,7 +644,7 @@ int em_cancel_transfer(usbi_transfer* itransfer) {
 }
 
 int em_handle_transfer_completion(usbi_transfer* itransfer) {
-  libusb_transfer_status status = runOnMain([itransfer]() {
+  libusb_transfer_status status = runOnMain([itransfer]() mutable {
     auto transfer = USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
 
     // Take ownership of the transfer result, as `em_clear_transfer_priv`
