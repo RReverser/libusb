@@ -35,7 +35,13 @@ using namespace emscripten;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-prototypes"
 #pragma clang diagnostic ignored "-Wunused-parameter"
+
+// For some reason, unlike EM_JS, needs to be outside namespace.
+EM_JS_DEPS(em_promise_then_impl_deps, "$getWasmTableEntry");
+
 namespace {
+  typedef void(*PromiseCalback)(EM_VAL result, void *arg);
+
 // clang-format off
 	EM_JS(EM_VAL, em_promise_catch_impl, (EM_VAL handle), {
 		let promise = Emval.toValue(handle);
@@ -78,10 +84,10 @@ namespace {
     return Emval.toHandle(promise);
 	});
 
-  EM_JS(EM_VAL, em_promise_then_impl, (EM_VAL handle, void(*on_fulfilled)(EM_VAL result, void *arg), void *arg), {
+  EM_JS(EM_VAL, em_promise_then_impl, (EM_VAL handle, PromiseCalback on_fulfilled, void *arg), {
     let promise = Emval.toValue(handle);
     promise = promise.then(result => {
-      {{{ makeDynCall('vip', 'on_fulfilled') }}}(Emval.toHandle(result), arg);
+      getWasmTableEntry(on_fulfilled)(Emval.toHandle(result), arg);
     });
     return Emval.toHandle(promise);
   });
