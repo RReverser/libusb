@@ -133,7 +133,23 @@ val em_promise_then(const val& promise, OnFulfilled&& on_fulfilled) {
       on_fulfilled_ptr));
 }
 
-static ProxyingQueue queue;
+static em_proxying_queue* queue = em_proxying_queue_create();
+
+template <typename Func>
+struct OneOffLambda {
+  OneOffLambda() = delete;
+  OneOffLambda(Func&& func) : func(std::move(func)) {}
+  OneOffLambda(OneOffLambda&&) = default;
+
+  template <typename... Args>
+  void operator()(Args&&... args) & {
+    this->func.value()(std::forward<Args>(args)...);
+    this->func.reset();
+  }
+
+ private:
+  std::optional<Func> func;
+};
 
 template <typename Func>
 auto runOnMain(Func&& func) {
@@ -141,7 +157,11 @@ auto runOnMain(Func&& func) {
     return func();
   }
   if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
-    queue.proxySync(emscripten_main_runtime_thread_id(), func);
+    auto func_one_off = OneOffLambda(std::move(func));
+
+    emscripten_proxy_sync(
+        queue, emscripten_main_runtime_thread_id(),
+        [](void* arg) { (*(decltype(func_one_off)*)arg)(); }, &func_one_off);
   } else {
     std::optional<std::invoke_result_t<Func>> result;
     runOnMain([&result, func = std::move(func)]() mutable {
@@ -160,14 +180,19 @@ val awaitOnMain(Func&& func) {
   // multiple threads might be fighting for its state; instead, use proxying
   // to synchronously block the current thread until the promise is complete.
   val result;
-  queue.proxySyncWithCtx(
-      emscripten_main_runtime_thread_id(), [&](auto ctx) mutable {
-        em_promise_then(func(),
-                        [&result, ctx = std::move(ctx)](val&& value) mutable {
-                          result = std::move(value);
-                          ctx.finish();
-                        });
+  auto func_one_off = OneOffLambda(
+      [&result, func = std::move(func)](em_proxying_ctx* ctx) mutable {
+        em_promise_then(func(), [&result, ctx](val&& value) mutable {
+          result = std::move(value);
+          emscripten_proxy_finish(ctx);
+        });
       });
+  emscripten_proxy_sync_with_ctx(
+      queue, emscripten_main_runtime_thread_id(),
+      [](em_proxying_ctx* ctx, void* arg) {
+        (*(decltype(func_one_off)*)arg)(ctx);
+      },
+      &func_one_off);
   return result;
 }
 
@@ -186,8 +211,9 @@ struct promise_result {
 
   template <typename Func>
   static promise_result awaitOnMain(Func&& func) {
-    val result = ::awaitOnMain(
-        [func = std::move(func)]() { return em_promise_catch(func()); });
+    val result = ::awaitOnMain([func = std::move(func)]() mutable {
+      return em_promise_catch(func());
+    });
     return runOnMain([result = std::move(result)]() mutable {
       return promise_result(std::move(result));
     });
