@@ -152,9 +152,7 @@ struct ValPtr {
 
   T& get() { return *ptr; }
 
-  void free() {
-    get().~T();
-  }
+  void free() { get().~T(); }
 
   T take() {
     auto value = std::move(get());
@@ -513,8 +511,8 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
       auto data = result.value["data"];
       if (!data.isNull()) {
         itransfer->transferred = data["byteLength"].as<int>();
-        val(typed_memory_view(transfer->length - skip, transfer->buffer + skip))
-            .call<void>("set", Uint8Array.new_(data["buffer"]));
+        val(typed_memory_view(transfer->length, transfer->buffer))
+            .call<void>("set", Uint8Array.new_(data["buffer"]), skip);
       }
     } else {
       itransfer->transferred = result.value["bytesWritten"].as<int>();
