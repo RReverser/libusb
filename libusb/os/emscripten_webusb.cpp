@@ -25,6 +25,7 @@
 #include <emscripten/threading.h>
 #include <emscripten/val.h>
 #include <pthread.h>
+
 #include <type_traits>
 #include <utility>
 
@@ -98,18 +99,6 @@ namespace {
   });
 // clang-format on
 
-val em_promise_catch(const val& promise) {
-  assert(emscripten_is_main_runtime_thread());
-  EM_VAL handle = promise.as_handle();
-  handle = em_promise_catch_impl(handle);
-  return val::take_ownership(handle);
-}
-
-template <typename OnFulfilled>
-val em_promise_then(val&& promise, OnFulfilled&& on_fulfilled) {
-  on_fulfilled(co_await promise);
-}
-
 static ProxyingQueue queue;
 
 template <typename Func>
@@ -118,13 +107,19 @@ auto runOnMain(Func&& func) {
     return func();
   }
   if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
-    assert(queue.proxySync(emscripten_main_runtime_thread_id(), [func_ = std::move(func)]() {
-      // Move again into local variable to render the captured func inert on the first (and only) call.
-      // This way it can be safely destructed on the main thread instead of the current one when this call finishes.
-      // TODO: remove this when https://github.com/emscripten-core/emscripten/issues/20610 is fixed.
-      auto func = std::move(func_);
-      func();
-    }));
+    assert(queue.proxySync(emscripten_main_runtime_thread_id(),
+                           [func_ = std::move(func)]() {
+                             // Move again into local variable to render the
+                             // captured func inert on the first (and only)
+                             // call. This way it can be safely destructed on
+                             // the main thread instead of the current one when
+                             // this call finishes.
+                             // TODO: remove this when
+                             // https://github.com/emscripten-core/emscripten/issues/20610
+                             // is fixed.
+                             auto func = std::move(func_);
+                             func();
+                           }));
   } else {
     std::optional<std::invoke_result_t<Func>> result;
     runOnMain([&result, func = std::move(func)]() mutable {
@@ -136,41 +131,64 @@ auto runOnMain(Func&& func) {
 
 // C++ struct representation for {value, error} object from above
 // (performs conversion in the constructor).
-struct promise_result {
+struct PromiseResult {
   libusb_error error;
   val value;
 
-  promise_result() = delete;
-  promise_result(promise_result&&) = default;
+  PromiseResult() = delete;
+  PromiseResult(PromiseResult&&) = default;
 
-  promise_result(val&& result)
+  PromiseResult(val&& result)
       : error(static_cast<libusb_error>(result["error"].as<int>())),
         value(result["value"]) {}
 
-  template <typename Func>
-  static promise_result awaitOnMain(Func&& func) {
-    val promise = runOnMain(func);
-
-    if (emscripten_is_main_runtime_thread()) {
-      return promise.await();
-    }
-    // if we're on a different thread, we can't use main thread's Asyncify as
-    // multiple threads might be fighting for its state; instead, use proxying
-    // to synchronously block the current thread until the promise is complete.
-    std::optional<promise_result> result;
-    assert(queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&result, promise = std::move(promise)](ProxyingCtx ctx) {
-      // Same as `func` in `runOnMain`, move `promise` on the first call so that it's destructed at the end of it.
-      em_promise_then(std::move(promise), [&result, ctx = std::move(ctx)](val&& value) {
-        result.emplace(std::move(value));
-        ctx.finish();
-      });
-    }));
-    return std::move(result.value());
+  template <typename OnFulfilled>
+  val promiseThen(val&& promise, OnFulfilled&& onResult) {
+    promise = wrapPromiseWithCatch(std::move(promise));
+    onResult(PromiseResult(co_await promise));
   }
 
-  ~promise_result() {
+  template <typename Func>
+  static PromiseResult awaitOnMain(Func&& func) {
+    return awaitPromiseOnMain(
+        runOnMain([func = std::move(func)]() mutable { return func(); }));
+  }
+
+  ~PromiseResult() {
     // make sure value is freed on the thread it exists on
     runOnMain([value = std::move(value)]() mutable {});
+  }
+
+ private:
+  // Wrap promise with conversion from some value T to {value: T, error: number}
+  static val wrapPromiseWithCatch(val&& promise) {
+    EM_VAL handle = promise.as_handle();
+    handle = em_promise_catch_impl(handle);
+    return val::take_ownership(handle);
+  }
+
+  static PromiseResult awaitPromiseOnMain(val&& promise) {
+    if (emscripten_is_main_runtime_thread()) {
+      // If we're already on the main thread, use Asyncify to block until
+      // the promise is resolved.
+      return wrapPromiseWithCatch(promise).await();
+    }
+    // If we're on a different thread, we can't use main thread's Asyncify as
+    // multiple threads might be fighting for its state; instead, use proxying
+    // to synchronously block the current thread until the promise is complete.
+    std::optional<PromiseResult> result;
+    assert(queue.proxySyncWithCtx(
+        emscripten_main_runtime_thread_id(),
+        [&result, promise = std::move(promise)](ProxyingCtx ctx) {
+          // Same as `func` in `runOnMain`, move `promise` on the first call so
+          // that it's destructed at the end of it.
+          promiseThen(std::move(promise),
+                      [&result, ctx = std::move(ctx)](PromiseResult&& result_) {
+                        result.emplace(std::move(result_));
+                        ctx.finish();
+                      });
+        }));
+    return std::move(result.value());
   }
 };
 
@@ -239,9 +257,13 @@ struct CachedDevice {
       });
     }
 
-    // Infer the device speed (which is not yet provided by WebUSB) from the descriptor.
-    if (dev->device_descriptor.bMaxPacketSize0 == /* actually means 2^9, only valid for superspeeds */ 9) {
-      dev->speed = dev->device_descriptor.bcdUSB >= 0x0310 ? LIBUSB_SPEED_SUPER_PLUS : LIBUSB_SPEED_SUPER;
+    // Infer the device speed (which is not yet provided by WebUSB) from the
+    // descriptor.
+    if (dev->device_descriptor.bMaxPacketSize0 ==
+        /* actually means 2^9, only valid for superspeeds */ 9) {
+      dev->speed = dev->device_descriptor.bcdUSB >= 0x0310
+                       ? LIBUSB_SPEED_SUPER_PLUS
+                       : LIBUSB_SPEED_SUPER;
     } else if (dev->device_descriptor.bcdUSB >= 0x0200) {
       dev->speed = LIBUSB_SPEED_HIGH;
     } else if (dev->device_descriptor.bMaxPacketSize0 > 8) {
@@ -314,9 +336,10 @@ struct CachedDevice {
   }
 
   template <typename... Args>
-  promise_result awaitOnMain(Args&&... args) {
-    return promise_result::awaitOnMain(
-        [&]() mutable { return device.call<val>(std::forward<Args>(args)...); });
+  PromiseResult awaitOnMain(Args&&... args) {
+    return PromiseResult::awaitOnMain([&]() mutable {
+      return device.call<val>(std::forward<Args>(args)...);
+    });
   }
 
   ~CachedDevice() {
@@ -327,10 +350,9 @@ struct CachedDevice {
   val device;
   std::vector<std::vector<uint8_t>> configurations;
 
-  promise_result requestDescriptor(uint8_t desc_type,
-                                   uint8_t desc_index,
-                                   uint16_t max_length) {
-    return promise_result::awaitOnMain([=, &device = device]() mutable {
+  PromiseResult requestDescriptor(uint8_t desc_type, uint8_t desc_index,
+                                  uint16_t max_length) {
+    return PromiseResult::awaitOnMain([=, &device = device]() mutable {
       return val::take_ownership(em_request_descriptor_impl(
           device.as_handle(), ((uint16_t)desc_type << 8) | desc_index,
           max_length));
@@ -345,7 +367,7 @@ struct WebUsbDevicePtr : ValPtr<CachedDevice> {
       : WebUsbDevicePtr(handle->dev) {}
 };
 
-struct WebUsbTransferPtr : ValPtr<val> {
+struct WebUsbTransferPtr : ValPtr<PromiseResult> {
  public:
   WebUsbTransferPtr(usbi_transfer* itransfer)
       : ValPtr(usbi_get_transfer_priv(itransfer)) {}
@@ -357,21 +379,23 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
   // caller must have called `await navigator.usb.requestDevice(...)`
   // in response to user interaction before going to LibUSB.
   // Otherwise this list will be empty.
-  auto result = promise_result::awaitOnMain(
-      []() mutable { return val::global("navigator")["usb"].call<val>("getDevices"); });
+  auto result = PromiseResult::awaitOnMain([]() mutable {
+    return val::global("navigator")["usb"].call<val>("getDevices");
+  });
   if (result.error) {
     return result.error;
   }
   auto& web_usb_devices = result.value;
   // Iterate over the exposed devices.
-  uint8_t devices_num =
-      runOnMain([&]() mutable { return web_usb_devices["length"].as<uint8_t>(); });
+  uint8_t devices_num = runOnMain(
+      [&]() mutable { return web_usb_devices["length"].as<uint8_t>(); });
   for (uint8_t i = 0; i < devices_num; i++) {
     std::optional<emscripten::val> web_usb_device_opt;
     unsigned long session_id = runOnMain([&]() mutable {
       auto& web_usb_device = web_usb_device_opt.emplace(web_usb_devices[i]);
 
-      thread_local const val SessionIdSymbol = val::global("Symbol")("libusb.session_id");
+      thread_local const val SessionIdSymbol =
+          val::global("Symbol")("libusb.session_id");
       static unsigned long next_session_id = 0;
 
       val session_id = web_usb_device[SessionIdSymbol];
@@ -379,8 +403,8 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
         return session_id.as<unsigned long>();
       }
 
-      // If the device doesn't have a session ID, it means we haven't seen it before.
-      // Generate a new session ID for it.
+      // If the device doesn't have a session ID, it means we haven't seen it
+      // before. Generate a new session ID for it.
       next_session_id++;
       web_usb_device.set(SessionIdSymbol, next_session_id);
       return next_session_id;
@@ -431,9 +455,7 @@ int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
   return cached_device.getConfigDescriptor(config_id, buf, len);
 }
 
-int em_get_config_descriptor(libusb_device* dev,
-                             uint8_t config_id,
-                             void* buf,
+int em_get_config_descriptor(libusb_device* dev, uint8_t config_id, void* buf,
                              size_t len) {
   return WebUsbDevicePtr(dev).get().getConfigDescriptor(config_id, buf, len);
 }
@@ -444,8 +466,7 @@ int em_get_configuration(libusb_device_handle* dev_handle,
   return LIBUSB_SUCCESS;
 }
 
-int em_get_config_descriptor_by_value(libusb_device* dev,
-                                      uint8_t config_value,
+int em_get_config_descriptor_by_value(libusb_device* dev, uint8_t config_value,
                                       void** buf) {
   auto& cached_device = WebUsbDevicePtr(dev).get();
   auto config_id = cached_device.findConfigDescriptorByValue(config_value);
@@ -476,8 +497,7 @@ int em_release_interface(libusb_device_handle* handle, uint8_t iface) {
       .error;
 }
 
-int em_set_interface_altsetting(libusb_device_handle* handle,
-                                uint8_t iface,
+int em_set_interface_altsetting(libusb_device_handle* handle, uint8_t iface,
                                 uint8_t altsetting) {
   return WebUsbDevicePtr(handle)
       .get()
@@ -499,9 +519,7 @@ int em_reset_device(libusb_device_handle* handle) {
   return WebUsbDevicePtr(handle).get().awaitOnMain("reset").error;
 }
 
-void em_destroy_device(libusb_device* dev) {
-  WebUsbDevicePtr(dev).free();
-}
+void em_destroy_device(libusb_device* dev) { WebUsbDevicePtr(dev).free(); }
 
 thread_local const val Uint8Array = val::global("Uint8Array");
 
@@ -588,11 +606,12 @@ int em_submit_transfer(usbi_transfer* itransfer) {
       default:
         return LIBUSB_ERROR_NOT_SUPPORTED;
     }
-    transfer_promise = em_promise_catch(std::move(transfer_promise));
-    em_promise_then(std::move(transfer_promise), [itransfer](val&& result) mutable {
-      WebUsbTransferPtr(itransfer).init_to(std::move(result));
-      usbi_signal_transfer_completion(itransfer);
-    });
+    PromiseResult::promiseThen(
+        std::move(transfer_promise),
+        [itransfer](PromiseResult&& result) mutable {
+          WebUsbTransferPtr(itransfer).init_to(std::move(result));
+          usbi_signal_transfer_completion(itransfer);
+        });
     return LIBUSB_SUCCESS;
   });
 }
@@ -601,9 +620,7 @@ void em_clear_transfer_priv(usbi_transfer* itransfer) {
   WebUsbTransferPtr(itransfer).free();
 }
 
-int em_cancel_transfer(usbi_transfer* itransfer) {
-  return LIBUSB_SUCCESS;
-}
+int em_cancel_transfer(usbi_transfer* itransfer) { return LIBUSB_SUCCESS; }
 
 int em_handle_transfer_completion(usbi_transfer* itransfer) {
   libusb_transfer_status status = runOnMain([itransfer]() mutable {
@@ -613,16 +630,13 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
     // is not called automatically for completed transfers and we must
     // free it to avoid leaks.
 
-    auto result_val = WebUsbTransferPtr(itransfer).take();
+    auto result = WebUsbTransferPtr(itransfer).take();
 
     if (itransfer->state_flags & USBI_TRANSFER_CANCELLING) {
       return LIBUSB_TRANSFER_CANCELLED;
     }
 
     libusb_transfer_status status = LIBUSB_TRANSFER_ERROR;
-
-    // We should have a `{value, error}` object by now.
-    promise_result result(std::move(result_val));
 
     if (!result.error) {
       auto web_usb_transfer_status = result.value["status"].as<std::string>();
@@ -691,5 +705,5 @@ extern "C" const usbi_os_backend usbi_backend = {
     .clear_transfer_priv = em_clear_transfer_priv,
     .handle_transfer_completion = em_handle_transfer_completion,
     .device_priv_size = sizeof(CachedDevice),
-    .transfer_priv_size = sizeof(val),
+    .transfer_priv_size = sizeof(PromiseResult),
 };
