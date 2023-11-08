@@ -37,12 +37,7 @@ using namespace emscripten;
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #pragma clang diagnostic ignored "-Wshadow"
 
-// For some reason, unlike EM_JS, needs to be outside namespace.
-EM_JS_DEPS(em_promise_then_impl_deps, "$getWasmTableEntry");
-
 namespace {
-typedef void (*PromiseCalback)(EM_VAL result, void* arg);
-
 // clang-format off
 	EM_JS(EM_VAL, em_promise_catch_impl, (EM_VAL handle), {
 		let promise = Emval.toValue(handle);
@@ -85,14 +80,6 @@ typedef void (*PromiseCalback)(EM_VAL result, void* arg);
     return Emval.toHandle(promise);
 	});
 
-  EM_JS(EM_VAL, em_promise_then_impl, (EM_VAL handle, PromiseCalback on_fulfilled, void *arg), {
-    let promise = Emval.toValue(handle);
-    promise = promise.then(result => {
-      getWasmTableEntry(on_fulfilled)(Emval.toHandle(result), arg);
-    });
-    return Emval.toHandle(promise);
-  });
-
   EM_JS(EM_VAL, em_request_descriptor_impl, (EM_VAL deviceHandle, uint16_t value, uint16_t maxLength), {
     let device = Emval.toValue(deviceHandle);
     let promise = device
@@ -120,17 +107,7 @@ val em_promise_catch(const val& promise) {
 
 template <typename OnFulfilled>
 val em_promise_then(val&& promise, OnFulfilled&& on_fulfilled) {
-  assert(emscripten_is_main_runtime_thread());
-  // move lambda to heap as it will be called when current stack is already
-  // unwound
-  auto on_fulfilled_ptr = new OnFulfilled(std::move(on_fulfilled));
-  return val::take_ownership(em_promise_then_impl(
-      promise.as_handle(),
-      [](EM_VAL result, void* arg) {
-        std::unique_ptr<OnFulfilled> on_fulfilled((OnFulfilled*)arg);
-        (*on_fulfilled)(val::take_ownership(result));
-      },
-      on_fulfilled_ptr));
+  on_fulfilled(co_await promise);
 }
 
 static ProxyingQueue queue;
