@@ -133,23 +133,7 @@ val em_promise_then(const val& promise, OnFulfilled&& on_fulfilled) {
       on_fulfilled_ptr));
 }
 
-static em_proxying_queue* queue = em_proxying_queue_create();
-
-template <typename Func>
-struct OneOffLambda {
-  OneOffLambda() = delete;
-  OneOffLambda(Func&& func) : func(std::move(func)) {}
-  OneOffLambda(OneOffLambda&&) = default;
-
-  template <typename... Args>
-  void operator()(Args&&... args) & {
-    this->func.value()(std::forward<Args>(args)...);
-    this->func.reset();
-  }
-
- private:
-  std::optional<Func> func;
-};
+static ProxyingQueue queue;
 
 template <typename Func>
 auto runOnMain(Func&& func) {
@@ -157,11 +141,12 @@ auto runOnMain(Func&& func) {
     return func();
   }
   if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
-    auto func_one_off = OneOffLambda(std::move(func));
-
-    emscripten_proxy_sync(
-        queue, emscripten_main_runtime_thread_id(),
-        [](void* arg) { (*(decltype(func_one_off)*)arg)(); }, &func_one_off);
+    assert(queue.proxySync(emscripten_main_runtime_thread_id(), [func = std::move(func)]() {
+      // Move again into local variable to render the captured func inert on the first (and only) call.
+      // This way it can be safely destructed on the main thread instead of the current one when this call finishes.
+      auto func = std::move(func);
+      func();
+    }));
   } else {
     std::optional<std::invoke_result_t<Func>> result;
     runOnMain([&result, func = std::move(func)]() mutable {
@@ -180,19 +165,14 @@ val awaitOnMain(Func&& func) {
   // multiple threads might be fighting for its state; instead, use proxying
   // to synchronously block the current thread until the promise is complete.
   std::optional<val> result;
-  auto func_one_off = OneOffLambda(
-      [&result, func = std::move(func)](em_proxying_ctx* ctx) mutable {
-        em_promise_then(func(), [&result, ctx](val&& value) mutable {
-          result.emplace(std::move(value));
-          emscripten_proxy_finish(ctx);
-        });
-      });
-  emscripten_proxy_sync_with_ctx(
-      queue, emscripten_main_runtime_thread_id(),
-      [](em_proxying_ctx* ctx, void* arg) {
-        (*(decltype(func_one_off)*)arg)(ctx);
-      },
-      &func_one_off);
+  assert(queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&result, func = std::move(func)](ProxyingCtx ctx) {
+    // Same as in runOnMain, move into a local variable on the first call so that it's destructed at the end of it.
+    auto func = std::move(func);
+    em_promise_then(func(), [&result, ctx = std::move(ctx)](val&& value) {
+      result.emplace(std::move(value));
+      ctx.finish();
+    });
+  }));
   return std::move(result.value());
 }
 
