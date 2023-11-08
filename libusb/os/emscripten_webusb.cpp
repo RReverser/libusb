@@ -119,7 +119,7 @@ val em_promise_catch(const val& promise) {
 }
 
 template <typename OnFulfilled>
-val em_promise_then(const val& promise, OnFulfilled&& on_fulfilled) {
+val em_promise_then(val&& promise, OnFulfilled&& on_fulfilled) {
   assert(emscripten_is_main_runtime_thread());
   // move lambda to heap as it will be called when current stack is already
   // unwound
@@ -141,10 +141,10 @@ auto runOnMain(Func&& func) {
     return func();
   }
   if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
-    assert(queue.proxySync(emscripten_main_runtime_thread_id(), [func = std::move(func)]() {
+    assert(queue.proxySync(emscripten_main_runtime_thread_id(), [func_ = std::move(func)]() {
       // Move again into local variable to render the captured func inert on the first (and only) call.
       // This way it can be safely destructed on the main thread instead of the current one when this call finishes.
-      auto func = std::move(func);
+      auto func = std::move(func_);
       func();
     }));
   } else {
@@ -154,26 +154,6 @@ auto runOnMain(Func&& func) {
     });
     return std::move(result.value());
   }
-}
-
-template <typename Func>
-val awaitOnMain(Func&& func) {
-  if (emscripten_is_main_runtime_thread()) {
-    return func().await();
-  }
-  // if we're on a different thread, we can't use main thread's Asyncify as
-  // multiple threads might be fighting for its state; instead, use proxying
-  // to synchronously block the current thread until the promise is complete.
-  std::optional<val> result;
-  assert(queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&result, func = std::move(func)](ProxyingCtx ctx) {
-    // Same as in runOnMain, move into a local variable on the first call so that it's destructed at the end of it.
-    auto func = std::move(func);
-    em_promise_then(func(), [&result, ctx = std::move(ctx)](val&& value) {
-      result.emplace(std::move(value));
-      ctx.finish();
-    });
-  }));
-  return std::move(result.value());
 }
 
 // C++ struct representation for {value, error} object from above
@@ -191,12 +171,23 @@ struct promise_result {
 
   template <typename Func>
   static promise_result awaitOnMain(Func&& func) {
-    val result = ::awaitOnMain([func = std::move(func)]() mutable {
-      return em_promise_catch(func());
-    });
-    return runOnMain([result = std::move(result)]() mutable {
-      return promise_result(std::move(result));
-    });
+    val promise = runOnMain(func);
+
+    if (emscripten_is_main_runtime_thread()) {
+      return promise.await();
+    }
+    // if we're on a different thread, we can't use main thread's Asyncify as
+    // multiple threads might be fighting for its state; instead, use proxying
+    // to synchronously block the current thread until the promise is complete.
+    std::optional<promise_result> result;
+    assert(queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&result, promise = std::move(promise)](ProxyingCtx ctx) {
+      // Same as `func` in `runOnMain`, move `promise` on the first call so that it's destructed at the end of it.
+      em_promise_then(std::move(promise), [&result, ctx = std::move(ctx)](val&& value) {
+        result.emplace(std::move(value));
+        ctx.finish();
+      });
+    }));
+    return std::move(result.value());
   }
 
   ~promise_result() {
