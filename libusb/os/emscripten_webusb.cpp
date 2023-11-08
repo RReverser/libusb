@@ -121,6 +121,7 @@ auto runOnMain(Func&& func) {
     assert(queue.proxySync(emscripten_main_runtime_thread_id(), [func_ = std::move(func)]() {
       // Move again into local variable to render the captured func inert on the first (and only) call.
       // This way it can be safely destructed on the main thread instead of the current one when this call finishes.
+      // TODO: remove this when https://github.com/emscripten-core/emscripten/issues/20610 is fixed.
       auto func = std::move(func_);
       func();
     }));
