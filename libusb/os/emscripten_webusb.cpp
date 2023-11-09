@@ -149,12 +149,12 @@ struct PromiseResult {
 };
 
 struct CaughtPromise {
-  CaughPromise(val&& promise)
+  CaughtPromise(val&& promise)
       : promise(wrapPromiseWithCatch(std::move(promise))) {}
 
   // Change the return type of coroutine-based await.
   auto operator co_await() && {
-    return CaughPromiseAwaiter(
+    return CaughPromisetAwaiter(
         val::promise_type::await_transform(std::move(promise)));
   }
 
@@ -175,8 +175,8 @@ struct CaughtPromise {
   // This is templated just to avoid referring to internal Emscripten awaiter
   // type by name.
   template <typename Inner>
-  struct CaughPromiseAwaiter : public Inner {
-    CaughPromiseAwaiter(Inner&& inner) : inner(inner) {}
+  struct CaughPromisetAwaiter : public Inner {
+    CaughPromisetAwaiter(Inner&& inner) : inner(inner) {}
 
     // `await_resume` finalizes the awaiter and should return the result
     // of the `co_await ...` expression - in our case, the stored value.
@@ -270,7 +270,8 @@ struct CachedDevice {
     }
 
     // Can't use RAII to close on exit as co_await is not permitted in
-    // destructors, so use a good old boolean + a wrapper instead.
+    // destructors (yet: https://github.com/cplusplus/papers/issues/445),
+    // so use a good old boolean + a wrapper instead.
     must_close = true;
 
     {
@@ -421,7 +422,7 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
   // caller must have called `await navigator.usb.requestDevice(...)`
   // in response to user interaction before going to LibUSB.
   // Otherwise this list will be empty.
-  auto result = co_await CaughPromise(
+  auto result = co_await CaughtPromise(
       val::global("navigator")["usb"].call<val>("getDevices"));
   if (result.error) {
     co_return result.error;
