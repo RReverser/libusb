@@ -651,9 +651,9 @@ int em_submit_transfer(usbi_transfer* itransfer) {
     }
     // Not a coroutine because we don't want to block on this promise, just
     // schedule an asynchronous callback.
-    PromiseResult::promiseThen(
-        std::move(transfer_promise),
-        [itransfer](PromiseResult&& result) mutable {
+    promiseThen(
+        CaughtPromise(std::move(transfer_promise)),
+        [itransfer](auto&& result) mutable {
           WebUsbTransferPtr(itransfer).init_to(std::move(result));
           usbi_signal_transfer_completion(itransfer);
         });
