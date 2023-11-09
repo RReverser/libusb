@@ -155,7 +155,7 @@ struct CaughtPromise {
   // Change the return type of coroutine-based await.
   auto operator co_await() && {
     return CaughPromiseAwaiter(
-        val::promise_type::await_transform(std::move(*this)));
+        val::promise_type::await_transform(std::move(promise)));
   }
 
   // Change return type of Asyncify-based await.
