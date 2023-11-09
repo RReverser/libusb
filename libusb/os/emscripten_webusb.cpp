@@ -142,54 +142,88 @@ struct PromiseResult {
       : error(static_cast<libusb_error>(result["error"].as<int>())),
         value(result["value"]) {}
 
-  template <typename OnFulfilled>
-  val promiseThen(val&& promise, OnFulfilled&& onResult) {
-    promise = wrapPromiseWithCatch(std::move(promise));
-    onResult(PromiseResult(co_await promise));
-  }
-
-  template <typename Func>
-  static PromiseResult awaitOnMain(Func&& func) {
-    return awaitPromiseOnMain(
-        runOnMain([func = std::move(func)]() mutable { return func(); }));
-  }
-
   ~PromiseResult() {
     // make sure value is freed on the thread it exists on
     runOnMain([value = std::move(value)]() mutable {});
   }
+};
 
-  // Wrap promise with conversion from some value T to {value: T, error: number}
+struct CaughtPromise {
+  CaughPromise(val&& promise)
+      : promise(wrapPromiseWithCatch(std::move(promise))) {}
+
+  // Change the return type of coroutine-based await.
+  auto operator co_await() && {
+    return CaughPromiseAwaiter(
+        val::promise_type::await_transform(std::move(*this)));
+  }
+
+  // Change return type of Asyncify-based await.
+  PromiseResult await() { return promise.await(); }
+
+ private:
+  val promise;
+
+  // Wrap promise with conversion from some value T to {value: T, error:
+  // number}
   static val wrapPromiseWithCatch(val&& promise) {
     EM_VAL handle = promise.as_handle();
     handle = em_promise_catch_impl(handle);
     return val::take_ownership(handle);
   }
 
-  static PromiseResult awaitPromiseOnMain(val&& promise) {
-    if (emscripten_is_main_runtime_thread()) {
-      // If we're already on the main thread, use Asyncify to block until
-      // the promise is resolved.
-      return wrapPromiseWithCatch(promise).await();
-    }
-    // If we're on a different thread, we can't use main thread's Asyncify as
-    // multiple threads might be fighting for its state; instead, use proxying
-    // to synchronously block the current thread until the promise is complete.
-    std::optional<PromiseResult> result;
-    assert(queue.proxySyncWithCtx(
-        emscripten_main_runtime_thread_id(),
-        [&result, promise = std::move(promise)](ProxyingCtx ctx) {
-          // Same as `func` in `runOnMain`, move `promise` on the first call so
-          // that it's destructed at the end of it.
-          promiseThen(std::move(promise),
-                      [&result, ctx = std::move(ctx)](PromiseResult&& result_) {
-                        result.emplace(std::move(result_));
-                        ctx.finish();
-                      });
-        }));
-    return std::move(result.value());
-  }
+  // This is templated just to avoid referring to internal Emscripten awaiter
+  // type by name.
+  template <typename Inner>
+  struct CaughPromiseAwaiter : public Inner {
+    CaughPromiseAwaiter(Inner&& inner) : inner(inner) {}
+
+    // `await_resume` finalizes the awaiter and should return the result
+    // of the `co_await ...` expression - in our case, the stored value.
+    auto await_resume() { return PromiseResult(Inner::await_resume()); }
+
+   private:
+    Inner awaiter;
+  };
 };
+
+template <typename Promise, typename OnResult>
+val promiseThen(Promise&& promise, OnResult&& onResult) {
+  onResult(co_await promise);
+}
+
+template <typename Promise>
+using PromiseReturnValue = void;
+
+template <>
+using PromiseReturnValue<val> = val;
+
+template <>
+using PromiseReturnValue<CaughtPromise> = PromiseResult;
+
+template <typename Func>
+static auto awaitOnMain(Func&& func) {
+  if (emscripten_is_main_runtime_thread()) {
+    // If we're already on the main thread, use Asyncify to block until
+    // the promise is resolved.
+    return func().await();
+  }
+  // If we're on a different thread, we can't use main thread's Asyncify as
+  // multiple threads might be fighting for its state; instead, use proxying
+  // to synchronously block the current thread until the promise is complete.
+  std::optional<PromiseReturnValue<decltype(func())>> result;
+  assert(queue.proxySyncWithCtx(
+      emscripten_main_runtime_thread_id(),
+      [&result, func_ = std::move(func)](ProxyingCtx ctx) {
+        // Same as `func` in `runOnMain`, move to destruct on the first call.
+        auto func = std::move(func_);
+        promiseThen(func(), [&result, ctx = std::move(ctx)](auto&& result_) {
+          result.emplace(std::move(result_));
+          ctx.finish();
+        });
+      }));
+  return std::move(result.value());
+}
 
 template <typename T>
 struct ValPtr {
@@ -227,7 +261,7 @@ struct CachedDevice {
   val initFromDeviceImpl(libusb_context* ctx, libusb_device* dev,
                          bool& must_close) {
     {
-      PromiseResult result = co_await callAsyncAndCatch("open");
+      auto result = co_await callAsyncAndCatch("open");
       if (result.error) {
         usbi_err(ctx, "failed to open device: %s",
                  libusb_error_name(result.error));
@@ -240,8 +274,8 @@ struct CachedDevice {
     must_close = true;
 
     {
-      PromiseResult result = co_await requestDescriptor(LIBUSB_DT_DEVICE, 0,
-                                                        LIBUSB_DT_DEVICE_SIZE);
+      auto result = co_await requestDescriptor(LIBUSB_DT_DEVICE, 0,
+                                               LIBUSB_DT_DEVICE_SIZE);
       if (result.error) {
         usbi_err(ctx, "failed to get device descriptor: %s",
                  libusb_error_name(result.error));
@@ -274,7 +308,7 @@ struct CachedDevice {
     auto configurations_len = dev->device_descriptor.bNumConfigurations;
     configurations.reserve(configurations_len);
     for (uint8_t j = 0; j < configurations_len; j++) {
-      PromiseResult result =
+      auto result =
           co_await requestDescriptor(LIBUSB_DT_CONFIG, j,
                                      /* MAX_CTRL_BUFFER_LENGTH */ 4096);
       if (result.error) {
@@ -301,7 +335,7 @@ struct CachedDevice {
   }
 
   uint8_t getActiveConfigValue() {
-    return runOnMain([&]() mutable {
+    return runOnMain([&]() {
       auto web_usb_config = device["configuration"];
       return web_usb_config.isNull()
                  ? 0
@@ -342,8 +376,8 @@ struct CachedDevice {
 
   template <typename... Args>
   PromiseResult awaitOnMain(Args&&... args) {
-    return PromiseResult::awaitOnMain([&]() mutable {
-      return device.call<val>(std::forward<Args>(args)...);
+    return awaitOnMain([&]() mutable {
+      return callAsyncAndCatch(std::forward<Args>(args)...);
     });
   }
 
@@ -356,18 +390,15 @@ struct CachedDevice {
   std::vector<std::vector<uint8_t>> configurations;
 
   template <typename... Args>
-  val callAsyncAndCatch(Args&&... args) {
-    return PromiseResult::wrapPromiseWithCatch(
-        device.call<val>(std::forward<Args>(args)...));
+  auto callAsyncAndCatch(Args&&... args) {
+    return CaughtPromise(device.call<val>(std::forward<Args>(args)...));
   }
 
-  val requestDescriptor(uint8_t desc_type, uint8_t desc_index,
-                        uint16_t max_length) {
-    return PromiseResult::wrapPromiseWithCatch([=, &device = device]() mutable {
-      return val::take_ownership(em_request_descriptor_impl(
-          device.as_handle(), ((uint16_t)desc_type << 8) | desc_index,
-          max_length));
-    });
+  auto requestDescriptor(uint8_t desc_type, uint8_t desc_index,
+                                  uint16_t max_length) {
+    return CaughtPromise(val::take_ownership(em_request_descriptor_impl(
+        device.as_handle(), ((uint16_t)desc_type << 8) | desc_index,
+        max_length)));
   }
 };
 
@@ -390,7 +421,7 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
   // caller must have called `await navigator.usb.requestDevice(...)`
   // in response to user interaction before going to LibUSB.
   // Otherwise this list will be empty.
-  PromiseResult result = co_await PromiseResult::wrapPromiseWithCatch(
+  auto result = co_await CaughPromise(
       val::global("navigator")["usb"].call<val>("getDevices"));
   if (result.error) {
     co_return result.error;
@@ -440,9 +471,10 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
 }
 
 int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
-  return PromiseResult::awaitOnMain(
-             [ctx, devs]() { return getDeviceList(ctx, devs); })
-      .value.as<int>();
+  // No need to wrap into CaughtPromise as we catch all individual ops in the
+  // inner implementation and return just the error code.
+  return awaitOnMain([ctx, devs]() { return getDeviceList(ctx, devs); })
+      .as<int>();
 }
 
 int em_open(libusb_device_handle* handle) {
