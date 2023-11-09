@@ -215,12 +215,16 @@ struct ValPtr {
  public:
   void init_to(T&& value) { new (ptr) T(std::move(value)); }
 
-  T& get() { return *ptr; }
+  const T& operator*() const { return *ptr; }
+  T& operator*() { return *ptr; }
 
-  void free() { get().~T(); }
+  const T* operator->() const { return ptr; }
+  T* operator->() { return ptr; }
+
+  void free() { ptr->~T(); }
 
   T take() {
-    auto value = std::move(get());
+    auto value = std::move(*ptr);
     free();
     return value;
   }
@@ -229,6 +233,8 @@ struct ValPtr {
   ValPtr(void* ptr) : ptr(static_cast<T*>(ptr)) {}
 
  private:
+  // Note: this is not a heap-allocated pointer, but a pointer to a part of the
+  // backend structure allocated by libusb itself.
   T* ptr;
 };
 
@@ -238,7 +244,7 @@ struct CachedDevice {
 
   CachedDevice(val device) : device(std::move(device)) {}
 
-  val& getDeviceAssumingMainThread() {
+  const val& getDeviceAssumingMainThread() const {
     assert(emscripten_is_main_runtime_thread());
     return device;
   }
@@ -322,7 +328,7 @@ struct CachedDevice {
     co_return std::move(result);
   }
 
-  uint8_t getActiveConfigValue() {
+  uint8_t getActiveConfigValue() const {
     return runOnMain([&]() {
       auto web_usb_config = device["configuration"];
       return web_usb_config.isNull()
@@ -351,7 +357,7 @@ struct CachedDevice {
     return len;
   }
 
-  int findConfigDescriptorByValue(uint8_t config_id) {
+  int findConfigDescriptorByValue(uint8_t config_id) const {
     for (size_t i = 0; i < configurations.size(); i++) {
       auto config_descriptor =
           (libusb_config_descriptor*)configurations[i].data();
@@ -363,7 +369,7 @@ struct CachedDevice {
   }
 
   template <typename... Args>
-  PromiseResult awaitOnMain(const char* methodName, Args&&... args) {
+  PromiseResult awaitOnMain(const char* methodName, Args&&... args) const {
     return ::awaitOnMain([&]() {
       return callAsyncAndCatch(methodName, std::forward<Args>(args)...);
     });
@@ -378,12 +384,13 @@ struct CachedDevice {
   std::vector<std::vector<uint8_t>> configurations;
 
   template <typename... Args>
-  CaughtPromise callAsyncAndCatch(const char* methodName, Args&&... args) {
+  CaughtPromise callAsyncAndCatch(const char* methodName,
+                                  Args&&... args) const {
     return device.call<val>(methodName, std::forward<Args>(args)...);
   }
 
   CaughtPromise requestDescriptor(uint8_t desc_type, uint8_t desc_index,
-                                  uint16_t max_length) {
+                                  uint16_t max_length) const {
     auto handle = em_request_descriptor_impl(
         device.as_handle(), ((uint16_t)desc_type << 8) | desc_index,
         max_length);
@@ -467,18 +474,18 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
 }
 
 int em_open(libusb_device_handle* handle) {
-  return WebUsbDevicePtr(handle).get().awaitOnMain("open").error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("open").error;
 }
 
 void em_close(libusb_device_handle* handle) {
   // LibUSB API doesn't allow us to handle an error here, but we still need to
   // wait for the promise to make sure that subsequent attempt to reopen the
   // same device doesn't fail with a "device busy" error.
-  WebUsbDevicePtr(handle).get().awaitOnMain("close");
+  WebUsbDevicePtr(handle)->awaitOnMain("close");
 }
 
 int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
-  auto& cached_device = WebUsbDevicePtr(dev).get();
+  auto& cached_device = *WebUsbDevicePtr(dev);
   auto config_value = cached_device.getActiveConfigValue();
   auto config_id = cached_device.findConfigDescriptorByValue(config_value);
   if (config_id < 0) {
@@ -489,18 +496,18 @@ int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
 
 int em_get_config_descriptor(libusb_device* dev, uint8_t config_id, void* buf,
                              size_t len) {
-  return WebUsbDevicePtr(dev).get().getConfigDescriptor(config_id, buf, len);
+  return WebUsbDevicePtr(dev)->getConfigDescriptor(config_id, buf, len);
 }
 
 int em_get_configuration(libusb_device_handle* dev_handle,
                          uint8_t* config_value) {
-  *config_value = WebUsbDevicePtr(dev_handle).get().getActiveConfigValue();
+  *config_value = WebUsbDevicePtr(dev_handle)->getActiveConfigValue();
   return LIBUSB_SUCCESS;
 }
 
 int em_get_config_descriptor_by_value(libusb_device* dev, uint8_t config_value,
                                       void** buf) {
-  auto& cached_device = WebUsbDevicePtr(dev).get();
+  auto& cached_device = *WebUsbDevicePtr(dev);
   auto config_id = cached_device.findConfigDescriptorByValue(config_value);
   if (config_id < 0) {
     return config_id;
@@ -510,30 +517,22 @@ int em_get_config_descriptor_by_value(libusb_device* dev, uint8_t config_value,
 
 int em_set_configuration(libusb_device_handle* dev_handle, int config) {
   return WebUsbDevicePtr(dev_handle)
-      .get()
-      .awaitOnMain("setConfiguration", config)
+      ->awaitOnMain("setConfiguration", config)
       .error;
 }
 
 int em_claim_interface(libusb_device_handle* handle, uint8_t iface) {
-  return WebUsbDevicePtr(handle)
-      .get()
-      .awaitOnMain("claimInterface", iface)
-      .error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("claimInterface", iface).error;
 }
 
 int em_release_interface(libusb_device_handle* handle, uint8_t iface) {
-  return WebUsbDevicePtr(handle)
-      .get()
-      .awaitOnMain("releaseInterface", iface)
-      .error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("releaseInterface", iface).error;
 }
 
 int em_set_interface_altsetting(libusb_device_handle* handle, uint8_t iface,
                                 uint8_t altsetting) {
   return WebUsbDevicePtr(handle)
-      .get()
-      .awaitOnMain("selectAlternateInterface", iface, altsetting)
+      ->awaitOnMain("selectAlternateInterface", iface, altsetting)
       .error;
 }
 
@@ -542,13 +541,12 @@ int em_clear_halt(libusb_device_handle* handle, unsigned char endpoint) {
   endpoint &= LIBUSB_ENDPOINT_ADDRESS_MASK;
 
   return WebUsbDevicePtr(handle)
-      .get()
-      .awaitOnMain("clearHalt", direction, endpoint)
+      ->awaitOnMain("clearHalt", direction, endpoint)
       .error;
 }
 
 int em_reset_device(libusb_device_handle* handle) {
-  return WebUsbDevicePtr(handle).get().awaitOnMain("reset").error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("reset").error;
 }
 
 void em_destroy_device(libusb_device* dev) { WebUsbDevicePtr(dev).free(); }
@@ -558,9 +556,8 @@ thread_local const val Uint8Array = val::global("Uint8Array");
 int em_submit_transfer(usbi_transfer* itransfer) {
   return runOnMain([itransfer]() {
     auto transfer = USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
-    auto& web_usb_device = WebUsbDevicePtr(transfer->dev_handle)
-                               .get()
-                               .getDeviceAssumingMainThread();
+    auto& web_usb_device =
+        WebUsbDevicePtr(transfer->dev_handle)->getDeviceAssumingMainThread();
     val transfer_promise;
     switch (transfer->type) {
       case LIBUSB_TRANSFER_TYPE_CONTROL: {
