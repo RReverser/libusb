@@ -159,7 +159,6 @@ struct PromiseResult {
     runOnMain([value = std::move(value)]() mutable {});
   }
 
- private:
   // Wrap promise with conversion from some value T to {value: T, error: number}
   static val wrapPromiseWithCatch(val&& promise) {
     EM_VAL handle = promise.as_handle();
@@ -225,36 +224,32 @@ struct CachedDevice {
     return device;
   }
 
-  bool initFromDevice(libusb_context* ctx, libusb_device* dev) {
+  val initFromDeviceImpl(libusb_context* ctx, libusb_device* dev,
+                         bool& must_close) {
     {
-      auto result = awaitOnMain("open");
+      PromiseResult result = co_await callAsyncAndCatch("open");
       if (result.error) {
         usbi_err(ctx, "failed to open device: %s",
                  libusb_error_name(result.error));
-        return false;
+        co_return false;
       }
     }
 
-    // we must close the device on exit regardless of whether we succeeded
-    struct CloseOnExit {
-      CachedDevice& cachedDevice;
-
-      ~CloseOnExit() { cachedDevice.awaitOnMain("close"); }
-    } close_on_exit{*this};
+    // Can't use RAII to close on exit as co_await is not permitted in
+    // destructors, so use a good old boolean + a wrapper instead.
+    must_close = true;
 
     {
-      auto result =
-          requestDescriptor(LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE);
+      PromiseResult result = co_await requestDescriptor(LIBUSB_DT_DEVICE, 0,
+                                                        LIBUSB_DT_DEVICE_SIZE);
       if (result.error) {
         usbi_err(ctx, "failed to get device descriptor: %s",
                  libusb_error_name(result.error));
-        return false;
+        co_return false;
       }
-      runOnMain([device_descriptor = std::move(result.value), dev]() mutable {
-        val(typed_memory_view(LIBUSB_DT_DEVICE_SIZE,
-                              (uint8_t*)&dev->device_descriptor))
-            .call<void>("set", device_descriptor);
-      });
+      val(typed_memory_view(LIBUSB_DT_DEVICE_SIZE,
+                            (uint8_t*)&dev->device_descriptor))
+          .call<void>("set", result.value);
     }
 
     // Infer the device speed (which is not yet provided by WebUSB) from the
@@ -273,26 +268,36 @@ struct CachedDevice {
     }
 
     if (usbi_sanitize_device(dev) < 0) {
-      return false;
+      co_return false;
     }
 
     auto configurations_len = dev->device_descriptor.bNumConfigurations;
     configurations.reserve(configurations_len);
     for (uint8_t j = 0; j < configurations_len; j++) {
-      auto result = requestDescriptor(LIBUSB_DT_CONFIG, j,
-                                      /* MAX_CTRL_BUFFER_LENGTH */ 4096);
+      PromiseResult result =
+          co_await requestDescriptor(LIBUSB_DT_CONFIG, j,
+                                     /* MAX_CTRL_BUFFER_LENGTH */ 4096);
       if (result.error) {
         usbi_err(ctx, "failed to get config descriptor %i: %s", j,
                  libusb_error_name(result.error));
-        return false;
+        co_return false;
       }
       configurations.push_back(
-          runOnMain([config_descriptor = std::move(result.value)]() mutable {
-            return convertJSArrayToNumberVector<uint8_t>(config_descriptor);
-          }));
+          convertJSArrayToNumberVector<uint8_t>(result.value));
     }
 
-    return true;
+    co_return true;
+  }
+
+  val initFromDevice(libusb_context* ctx, libusb_device* dev) {
+    bool must_close = false;
+    val result = co_await initFromDeviceImpl(ctx, dev, must_close);
+    if (must_close) {
+      // Catch the error but ignore it, we don't care much whether closing
+      // succeeded as we are likely to reuse that device anyway.
+      co_await callAsyncAndCatch("close");
+    }
+    co_return std::move(result);
   }
 
   uint8_t getActiveConfigValue() {
@@ -350,9 +355,15 @@ struct CachedDevice {
   val device;
   std::vector<std::vector<uint8_t>> configurations;
 
-  PromiseResult requestDescriptor(uint8_t desc_type, uint8_t desc_index,
-                                  uint16_t max_length) {
-    return PromiseResult::awaitOnMain([=, &device = device]() mutable {
+  template <typename... Args>
+  val callAsyncAndCatch(Args&&... args) {
+    return PromiseResult::wrapPromiseWithCatch(
+        device.call<val>(std::forward<Args>(args)...));
+  }
+
+  val requestDescriptor(uint8_t desc_type, uint8_t desc_index,
+                        uint16_t max_length) {
+    return PromiseResult::wrapPromiseWithCatch([=, &device = device]() mutable {
       return val::take_ownership(em_request_descriptor_impl(
           device.as_handle(), ((uint16_t)desc_type << 8) | desc_index,
           max_length));
@@ -373,42 +384,34 @@ struct WebUsbTransferPtr : ValPtr<PromiseResult> {
       : ValPtr(usbi_get_transfer_priv(itransfer)) {}
 };
 
-int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
+val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
   // C++ equivalent of `await navigator.usb.getDevices()`.
   // Note: at this point we must already have some devices exposed -
   // caller must have called `await navigator.usb.requestDevice(...)`
   // in response to user interaction before going to LibUSB.
   // Otherwise this list will be empty.
-  auto result = PromiseResult::awaitOnMain([]() mutable {
-    return val::global("navigator")["usb"].call<val>("getDevices");
-  });
+  PromiseResult result = co_await PromiseResult::wrapPromiseWithCatch(
+      val::global("navigator")["usb"].call<val>("getDevices"));
   if (result.error) {
-    return result.error;
+    co_return result.error;
   }
-  auto& web_usb_devices = result.value;
-  // Iterate over the exposed devices.
-  uint8_t devices_num = runOnMain(
-      [&]() mutable { return web_usb_devices["length"].as<uint8_t>(); });
-  for (uint8_t i = 0; i < devices_num; i++) {
-    std::optional<emscripten::val> web_usb_device_opt;
-    unsigned long session_id = runOnMain([&]() mutable {
-      auto& web_usb_device = web_usb_device_opt.emplace(web_usb_devices[i]);
+  for (auto&& web_usb_device : result.value) {
+    thread_local const val SessionIdSymbol =
+        val::global("Symbol")("libusb.session_id");
 
-      thread_local const val SessionIdSymbol =
-          val::global("Symbol")("libusb.session_id");
-      static unsigned long next_session_id = 0;
+    unsigned long session_id;
+    val session_id_val = web_usb_device[SessionIdSymbol];
 
-      val session_id = web_usb_device[SessionIdSymbol];
-      if (!session_id.isUndefined()) {
-        return session_id.as<unsigned long>();
-      }
-
+    if (!session_id_val.isUndefined()) {
+      session_id = session_id_val.as<unsigned long>();
+    } else {
       // If the device doesn't have a session ID, it means we haven't seen it
       // before. Generate a new session ID for it.
-      next_session_id++;
-      web_usb_device.set(SessionIdSymbol, next_session_id);
-      return next_session_id;
-    });
+      static unsigned long next_session_id = 0;
+      session_id = next_session_id++;
+      web_usb_device.set(SessionIdSymbol, session_id);
+    }
+
     // LibUSB uses that ID to check if this device is already in its own
     // list. As long as there are no two instances of same device
     // connected and exposed to the page, we should be fine...
@@ -420,9 +423,11 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
         continue;
       }
 
-      auto cachedDevice = CachedDevice(std::move(web_usb_device_opt.value()));
+      auto cachedDevice = CachedDevice(std::move(web_usb_device));
 
-      if (!cachedDevice.initFromDevice(ctx, dev)) {
+      val initialized = co_await cachedDevice.initFromDevice(ctx, dev);
+
+      if (!initialized.as<bool>()) {
         libusb_unref_device(dev);
         continue;
       }
@@ -431,7 +436,13 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
     }
     *devs = discovered_devs_append(*devs, dev);
   }
-  return LIBUSB_SUCCESS;
+  co_return LIBUSB_SUCCESS;
+}
+
+int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
+  return PromiseResult::awaitOnMain(
+             [ctx, devs]() { return getDeviceList(ctx, devs); })
+      .value.as<int>();
 }
 
 int em_open(libusb_device_handle* handle) {
@@ -606,6 +617,8 @@ int em_submit_transfer(usbi_transfer* itransfer) {
       default:
         return LIBUSB_ERROR_NOT_SUPPORTED;
     }
+    // Not a coroutine because we don't want to block on this promise, just
+    // schedule an asynchronous callback.
     PromiseResult::promiseThen(
         std::move(transfer_promise),
         [itransfer](PromiseResult&& result) mutable {
