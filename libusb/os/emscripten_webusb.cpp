@@ -82,8 +82,12 @@ namespace {
 	});
 // clang-format on
 
-void copyFromTypedArray(void* dst, val src, size_t len, size_t dst_offset = 0) {
-  val(typed_memory_view(len, (uint8_t*)dst)).call<void>("set", src, dst_offset);
+void copyFromDataView(void* dst, const val& src, size_t len,
+                      size_t dst_offset = 0) {
+  thread_local const val Uint8Array = val::global("Uint8Array");
+
+  val(typed_memory_view(len, (uint8_t*)dst))
+      .call<void>("set", Uint8Array.new_(src), dst_offset);
 }
 
 val getUnsharedMemoryView(void* src, size_t len) {
@@ -186,16 +190,17 @@ static std::invoke_result_t<Func>::AwaitResult awaitOnMain(Func&& func) {
   // to synchronously block the current thread until the promise is complete.
   std::optional<typename std::invoke_result_t<Func>::AwaitResult> result;
   assert(!result.has_value());
-  queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&](ProxyingQueue::ProxyingCtx ctx) {
-    // Same as `func` in `runOnMain`, move to destruct on the first call.
-    auto func_ = std::move(func);
-    promiseThen(func_(),
-                [&result, ctx = std::move(ctx)](auto&& result_) mutable {
-                  assert(!result.has_value());
-                  result.emplace(std::move(result_));
-                  ctx.finish();
-                });
-  });
+  queue.proxySyncWithCtx(
+      emscripten_main_runtime_thread_id(), [&](ProxyingQueue::ProxyingCtx ctx) {
+        // Same as `func` in `runOnMain`, move to destruct on the first call.
+        auto func_ = std::move(func);
+        promiseThen(func_(),
+                    [&result, ctx = std::move(ctx)](auto&& result_) mutable {
+                      assert(!result.has_value());
+                      result.emplace(std::move(result_));
+                      ctx.finish();
+                    });
+      });
   return std::move(result.value());
 }
 
@@ -399,8 +404,8 @@ struct CachedDevice {
       if (result.error) {
         co_return result.error;
       }
-      copyFromTypedArray(&dev->device_descriptor, result.value,
-                         LIBUSB_DT_DEVICE_SIZE);
+      copyFromDataView(&dev->device_descriptor, result.value,
+                       LIBUSB_DT_DEVICE_SIZE);
     }
 
     // Infer the device speed (which is not yet provided by WebUSB) from the
@@ -438,7 +443,7 @@ struct CachedDevice {
       auto configLen = configVal["byteLength"].as<size_t>();
       auto& config = configurations.emplace_back(
           (usbi_configuration_descriptor*)::operator new(configLen));
-      copyFromTypedArray(config.get(), configVal, configLen);
+      copyFromDataView(config.get(), configVal, configLen);
     }
 
     co_return (int) LIBUSB_SUCCESS;
@@ -602,8 +607,6 @@ int em_reset_device(libusb_device_handle* handle) {
 
 void em_destroy_device(libusb_device* dev) { WebUsbDevicePtr(dev).free(); }
 
-thread_local const val Uint8Array = val::global("Uint8Array");
-
 int em_submit_transfer(usbi_transfer* itransfer) {
   return runOnMain([itransfer]() {
     auto transfer = USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
@@ -687,8 +690,8 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
       auto data = value["data"];
       if (!data.isNull()) {
         itransfer->transferred = data["byteLength"].as<int>();
-        copyFromTypedArray(transfer->buffer, Uint8Array.new_(data["buffer"]),
-                           transfer->length, skip);
+        copyFromDataView(transfer->buffer, data["buffer"], transfer->length,
+                         skip);
       }
     } else {
       itransfer->transferred = value["bytesWritten"].as<int>();
