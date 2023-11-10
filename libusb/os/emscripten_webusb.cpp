@@ -80,23 +80,6 @@ namespace {
     );
     return Emval.toHandle(promise);
 	});
-
-  EM_JS(EM_VAL, em_request_descriptor_impl, (EM_VAL deviceHandle, uint16_t value, uint16_t maxLength), {
-    let device = Emval.toValue(deviceHandle);
-    let promise = device
-      .controlTransferIn(
-        {
-          requestType: "standard",
-          recipient: "device",
-          request: /* LIBUSB_REQUEST_GET_DESCRIPTOR */ 6,
-          value,
-          index: 0,
-        },
-        maxLength,
-      )
-      .then((result) => new Uint8Array(result.data.buffer));
-    return Emval.toHandle(promise);
-  });
 // clang-format on
 
 void copyFromTypedArray(void* dst, val src, size_t len, size_t dst_offset = 0) {
@@ -228,6 +211,52 @@ static auto awaitOnMain(Func&& func) {
   return std::move(result.value());
 }
 
+val makeControlTransferPromise(const val& dev, libusb_control_setup setup) {
+  auto params = val::object();
+
+  const char* request_type = "unknown";
+  // See LIBUSB_REQ_TYPE in windows_winusb.h (or docs for
+  // `bmRequestType`).
+  switch (setup->bmRequestType & (0x03 << 5)) {
+    case LIBUSB_REQUEST_TYPE_STANDARD:
+      request_type = "standard";
+      break;
+    case LIBUSB_REQUEST_TYPE_CLASS:
+      request_type = "class";
+      break;
+    case LIBUSB_REQUEST_TYPE_VENDOR:
+      request_type = "vendor";
+      break;
+  }
+  params.set("requestType", request_type);
+
+  const char* recipient = "other";
+  switch (setup->bmRequestType & 0x0f) {
+    case LIBUSB_RECIPIENT_DEVICE:
+      recipient = "device";
+      break;
+    case LIBUSB_RECIPIENT_INTERFACE:
+      recipient = "interface";
+      break;
+    case LIBUSB_RECIPIENT_ENDPOINT:
+      recipient = "endpoint";
+      break;
+  }
+  params.set("recipient", recipient);
+
+  params.set("request", setup->bRequest);
+  params.set("value", setup->wValue);
+  params.set("index", setup->wIndex);
+
+  if (setup->bmRequestType & LIBUSB_ENDPOINT_IN) {
+    return dev.call<val>("controlTransferIn", params, setup->wLength);
+  } else {
+    auto data = getUnsharedMemoryView(
+        libusb_control_transfer_get_data(transfer), setup->wLength);
+    return dev.call<val>("controlTransferOut", params, data);
+  }
+}
+
 template <typename T>
 struct ValPtr {
  public:
@@ -349,12 +378,19 @@ struct CachedDevice {
     return device.call<val>(methodName, std::forward<Args>(args)...);
   }
 
-  CaughtPromise requestDescriptor(uint8_t desc_type, uint8_t desc_index,
+  CaughtPromise requestDescriptor(libusb_descriptor_type desc_type,
+                                  uint8_t desc_index,
                                   uint16_t max_length) const {
-    auto handle = em_request_descriptor_impl(
-        device.as_handle(), ((uint16_t)desc_type << 8) | desc_index,
-        max_length);
-    return val::take_ownership(handle);
+    return makeControlTransferPromise(
+        device,
+        {
+            .bmRequestType = LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD |
+                             LIBUSB_RECIPIENT_DEVICE,
+            .bRequest = LIBUSB_REQUEST_GET_DESCRIPTOR,
+            .wValue = ((uint16_t)desc_type << 8) | desc_index,
+            .wIndex = 0,
+            .wLength = max_length,
+        });
   }
 
   val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
@@ -576,56 +612,8 @@ int em_submit_transfer(usbi_transfer* itransfer) {
     val transfer_promise;
     switch (transfer->type) {
       case LIBUSB_TRANSFER_TYPE_CONTROL: {
-        auto setup = libusb_control_transfer_get_setup(transfer);
-        auto web_usb_control_transfer_params = val::object();
-
-        const char* web_usb_request_type = "unknown";
-        // See LIBUSB_REQ_TYPE in windows_winusb.h (or docs for
-        // `bmRequestType`).
-        switch (setup->bmRequestType & (0x03 << 5)) {
-          case LIBUSB_REQUEST_TYPE_STANDARD:
-            web_usb_request_type = "standard";
-            break;
-          case LIBUSB_REQUEST_TYPE_CLASS:
-            web_usb_request_type = "class";
-            break;
-          case LIBUSB_REQUEST_TYPE_VENDOR:
-            web_usb_request_type = "vendor";
-            break;
-        }
-        web_usb_control_transfer_params.set("requestType",
-                                            web_usb_request_type);
-
-        const char* recipient = "other";
-        switch (setup->bmRequestType & 0x0f) {
-          case LIBUSB_RECIPIENT_DEVICE:
-            recipient = "device";
-            break;
-          case LIBUSB_RECIPIENT_INTERFACE:
-            recipient = "interface";
-            break;
-          case LIBUSB_RECIPIENT_ENDPOINT:
-            recipient = "endpoint";
-            break;
-        }
-        web_usb_control_transfer_params.set("recipient", recipient);
-
-        web_usb_control_transfer_params.set("request", setup->bRequest);
-        web_usb_control_transfer_params.set("value", setup->wValue);
-        web_usb_control_transfer_params.set("index", setup->wIndex);
-
-        if (setup->bmRequestType & LIBUSB_ENDPOINT_IN) {
-          transfer_promise = web_usb_device.call<val>(
-              "controlTransferIn", std::move(web_usb_control_transfer_params),
-              setup->wLength);
-        } else {
-          auto data = getUnsharedMemoryView(
-              libusb_control_transfer_get_data(transfer), setup->wLength);
-          transfer_promise = web_usb_device.call<val>(
-              "controlTransferOut", std::move(web_usb_control_transfer_params),
-              data);
-        }
-
+        transfer_promise = makeControlTransferPromise(
+            web_usb_device, *libusb_control_transfer_get_setup(transfer));
         break;
       }
       case LIBUSB_TRANSFER_TYPE_BULK:
