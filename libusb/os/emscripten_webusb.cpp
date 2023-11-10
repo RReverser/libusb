@@ -90,14 +90,14 @@ void copyFromDataView(void* dst, const val& src, size_t len,
       .call<void>("set", Uint8Array.new_(src), dst_offset);
 }
 
-val getUnsharedMemoryView(void* src, size_t len) {
-  auto view = val(typed_memory_view(len, (uint8_t*)src));
+auto getUnsharedMemoryView(void* src, size_t len) {
+  auto view = typed_memory_view(len, (uint8_t*)src);
 #ifdef _REENTRANT
   // Unfortunately, TypedArrays backed by SharedArrayBuffers are not accepted
   // by most Web APIs, trading off guaranteed thread-safety for performance
   // loss. The usual workaround is to copy them into a new TypedArray, which is
   // what we do here via the `.slice()` method.
-  return view.call<val>("slice");
+  return val(view).call<val>("slice");
 #else
   // Non-threaded builds can avoid the copy penalty.
   return std::move(view);
