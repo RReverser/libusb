@@ -159,8 +159,7 @@ auto runOnMain(Func&& func) {
   return func();
 }
 
-// C++ struct representation for {value, error} object from above
-// (performs conversion in the constructor).
+// C++ struct representation for `{value, error}` object used by `CaughtPromise` below.
 struct PromiseResult {
   int error;
   val value;
@@ -180,6 +179,7 @@ struct PromiseResult {
 // TODO: change upstream implementation to use co_await instead of
 // await_transform to make subclassing easier so that co_await
 // on CaughtPromise could do the transform to PromiseResult automatically.
+// See https://github.com/emscripten-core/emscripten/pull/20682.
 struct CaughtPromise : val {
   CaughtPromise(val&& promise)
       : val(wrapPromiseWithCatch(std::move(promise))) {}
@@ -187,8 +187,7 @@ struct CaughtPromise : val {
   using AwaitResult = PromiseResult;
 
  private:
-  // Wrap promise with conversion from some value T to {value: T, error:
-  // number}
+  // Wrap promise with conversion from some value T to `{value: T, error: number}`.
   static val wrapPromiseWithCatch(val&& promise) {
     auto handle = promise.as_handle();
     handle = em_promise_catch_impl(handle);
@@ -284,9 +283,9 @@ val makeControlTransferPromise(const val& dev, libusb_control_setup* setup) {
   }
 }
 
+// Smart pointer for managing pointers to places allocated by libusb inside its backend structures.
 template <typename T>
 struct ValPtr {
- public:
   template <typename... Args>
   void emplace(Args&&... args) {
     new (ptr) T(std::forward<Args>(args)...);
@@ -512,14 +511,15 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
     } else {
       // If the device doesn't have a session ID, it means we haven't seen it
       // before. Generate a new session ID for it.
+      // We can associate an incrementing ID with the `USBDevice` object itself.
+      // It's guaranteed to be alive and, thus, stable as long as the device is
+      // connected, even between different libusb invocations.
+      // See https://github.com/WICG/webusb/issues/241.
       static unsigned long next_session_id = 0;
       session_id = next_session_id++;
       web_usb_device.set(SessionIdSymbol, session_id);
     }
 
-    // LibUSB uses that ID to check if this device is already in its own
-    // list. As long as there are no two instances of same device
-    // connected and exposed to the page, we should be fine...
     auto dev = usbi_get_device_by_session_id(ctx, session_id);
     if (dev == NULL) {
       dev = usbi_alloc_device(ctx, session_id);
