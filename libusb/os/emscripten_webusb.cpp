@@ -443,7 +443,7 @@ struct CachedDevice {
       if (result.error) {
         co_return result.error;
       }
-      auto& configVal = result.value["data"];
+      auto configVal = result.value["data"];
       auto configLen = configVal["byteLength"].as<size_t>();
       auto& config = configurations.emplace_back(
           (usbi_configuration_descriptor*)::operator new(configLen));
