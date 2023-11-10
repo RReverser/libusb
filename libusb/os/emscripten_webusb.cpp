@@ -711,8 +711,8 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
              : usbi_handle_transfer_completion(itransfer, status);
 }
 }  // namespace
-#pragma clang diagnostic pop
 
+#pragma clang diagnostic ignored "-Wmissing-field-initializers"
 extern "C" const usbi_os_backend usbi_backend = {
     .name = "Emscripten + WebUSB backend",
     .caps = LIBUSB_CAP_HAS_CAPABILITY,
@@ -737,3 +737,5 @@ extern "C" const usbi_os_backend usbi_backend = {
     .device_priv_size = sizeof(CachedDevice),
     .transfer_priv_size = sizeof(PromiseResult),
 };
+
+#pragma clang diagnostic pop
