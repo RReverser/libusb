@@ -196,13 +196,16 @@ struct CaughtPromise : val {
   }
 };
 
+// TODO: remove this when CaughtPromise can return AwaitResult from co_await
+// directly.
+#define co_await_caught(promise) PromiseResult(co_await promise)
+
 template <typename Promise, typename OnResult>
 val promiseThen(Promise&& promise, OnResult&& onResult) {
   // Save captures from the callback while we can, or they'll be destructed.
   // https://devblogs.microsoft.com/oldnewthing/20211103-00/?p=105870
   auto onResult_ = std::move(onResult);
-  val result = co_await promise;
-  onResult_(std::move(result));
+  onResult_(co_await promise);
   co_return val::undefined();
 }
 
@@ -417,7 +420,7 @@ struct CachedDevice {
 
   val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
     {
-      auto result = PromiseResult(co_await callAsyncAndCatch("open"));
+      auto result = co_await_caught(callAsyncAndCatch("open"));
       if (result.error) {
         co_return result.error;
       }
@@ -429,8 +432,8 @@ struct CachedDevice {
     must_close = true;
 
     {
-      auto result = PromiseResult(co_await requestDescriptor(
-          LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE));
+      auto result = co_await_caught(
+          requestDescriptor(LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE));
       if (result.error) {
         co_return result.error;
       }
@@ -462,9 +465,9 @@ struct CachedDevice {
     auto configurations_len = dev->device_descriptor.bNumConfigurations;
     configurations.reserve(configurations_len);
     for (uint8_t j = 0; j < configurations_len; j++) {
-      auto result = PromiseResult(
-          co_await requestDescriptor(LIBUSB_DT_CONFIG, j,
-                                     /* MAX_CTRL_BUFFER_LENGTH */ 4096));
+      auto result =
+          co_await_caught(requestDescriptor(LIBUSB_DT_CONFIG, j,
+                                            /* MAX_CTRL_BUFFER_LENGTH */ 4096));
       if (result.error) {
         co_return result.error;
       }
@@ -492,8 +495,8 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
   // caller must have called `await navigator.usb.requestDevice(...)`
   // in response to user interaction before going to LibUSB.
   // Otherwise this list will be empty.
-  auto result = PromiseResult(co_await CaughtPromise(
-      val::global("navigator")["usb"].call<val>("getDevices")));
+  auto result = co_await_caught(
+      CaughtPromise(val::global("navigator")["usb"].call<val>("getDevices")));
   if (result.error) {
     co_return result.error;
   }
@@ -525,10 +528,9 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
         continue;
       }
 
-      auto error = (co_await CachedDevice::initFromDevice(
-                        std::move(web_usb_device), dev))
-                       .as<int>();
-      if (error) {
+      auto statusVal =
+          co_await CachedDevice::initFromDevice(std::move(web_usb_device), dev);
+      if (auto error = statusVal.as<int>()) {
         usbi_err(ctx, "failed to read device information: %s",
                  libusb_error_name(error));
         libusb_unref_device(dev);
