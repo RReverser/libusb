@@ -88,6 +88,19 @@ namespace {
   });
 // clang-format on
 
+libusb_transfer_status getTransferStatus(const val& transfer_result) {
+  auto status = transfer_result["status"].as<std::string>();
+  if (status == "ok") {
+    return LIBUSB_TRANSFER_COMPLETED;
+  } else if (status == "stall") {
+    return LIBUSB_TRANSFER_STALL;
+  } else if (status == "babble") {
+    return LIBUSB_TRANSFER_OVERFLOW;
+  } else {
+    return LIBUSB_TRANSFER_ERROR;
+  }
+}
+
 // Note: this assumes that `dst` is valid for at least `src.byteLength` bytes.
 // This is true for all results returned from WebUSB as we pass max length to
 // the transfer APIs.
@@ -409,6 +422,9 @@ struct CachedDevice {
       if (result.error) {
         co_return result.error;
       }
+      if (auto error = getTransferStatus(result.value)) {
+        co_return error;
+      }
       copyFromDataView(&dev->device_descriptor, result.value["data"]);
     }
 
@@ -427,11 +443,8 @@ struct CachedDevice {
       dev->speed = LIBUSB_SPEED_LOW;
     }
 
-    {
-      auto error = usbi_sanitize_device(dev);
-      if (error) {
-        co_return error;
-      }
+    if (auto error = usbi_sanitize_device(dev)) {
+      co_return error;
     }
 
     auto configurations_len = dev->device_descriptor.bNumConfigurations;
@@ -442,6 +455,9 @@ struct CachedDevice {
                                      /* MAX_CTRL_BUFFER_LENGTH */ 4096));
       if (result.error) {
         co_return result.error;
+      }
+      if (auto error = getTransferStatus(result.value)) {
+        co_return error;
       }
       auto configVal = result.value["data"];
       auto configLen = configVal["byteLength"].as<size_t>();
@@ -700,16 +716,7 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
       itransfer->transferred = value["bytesWritten"].as<int>();
     }
 
-    auto web_usb_transfer_status = value["status"].as<std::string>();
-    if (web_usb_transfer_status == "ok") {
-      return LIBUSB_TRANSFER_COMPLETED;
-    } else if (web_usb_transfer_status == "stall") {
-      return LIBUSB_TRANSFER_STALL;
-    } else if (web_usb_transfer_status == "babble") {
-      return LIBUSB_TRANSFER_OVERFLOW;
-    } else {
-      return LIBUSB_TRANSFER_ERROR;
-    }
+    return getTransferStatus(value);
   });
 
   // Invoke user's handlers outside of the main thread to reduce pressure.
