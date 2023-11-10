@@ -100,20 +100,6 @@ val getUnsharedMemoryView(void* src, size_t len) {
 #endif
 }
 
-// Allow libusb_error to be used directly in `val` conversions.
-// Otherwise we'd need to cast it to `int` everywhere before creating a `val`.
-struct BindingType<libusb_error> {
-  using WireType = int;
-
-  static libusb_error fromWireType(WireType value) {
-    return static_cast<libusb_error>(value);
-  }
-
-  static WireType toWireType(libusb_error value) {
-    return static_cast<WireType>(value);
-  }
-};
-
 static ProxyingQueue queue;
 
 template <typename Func>
@@ -145,14 +131,14 @@ auto runOnMain(Func&& func) {
 // C++ struct representation for {value, error} object from above
 // (performs conversion in the constructor).
 struct PromiseResult {
-  libusb_error error;
+  int error;
   val value;
 
   PromiseResult() = delete;
   PromiseResult(PromiseResult&&) = default;
 
   PromiseResult(val&& result)
-      : error(result["error"].as<libusb_error>()), value(result["value"]) {}
+      : error(result["error"].as<int>()), value(result["value"]) {}
 
   ~PromiseResult() {
     // make sure value is freed on the thread it exists on
@@ -371,7 +357,7 @@ struct CachedDevice {
   }
 
   template <typename... Args>
-  libusb_error awaitOnMain(const char* methodName, Args&&... args) const {
+  int awaitOnMain(const char* methodName, Args&&... args) const {
     return ::awaitOnMain([&]() {
              return callAsyncAndCatch(methodName, std::forward<Args>(args)...);
            })
@@ -466,7 +452,7 @@ struct CachedDevice {
       copyFromTypedArray(config.get(), configVal, configLen);
     }
 
-    co_return LIBUSB_SUCCESS;
+    co_return (int) LIBUSB_SUCCESS;
   }
 
   CachedDevice(val device) : device(std::move(device)) {}
@@ -515,7 +501,7 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
 
       auto error = (co_await CachedDevice::initFromDevice(
                         std::move(web_usb_device), dev))
-                       .as<libusb_error>();
+                       .as<int>();
       if (error) {
         usbi_err(ctx, "failed to read device information: %s",
                  libusb_error_name(error));
@@ -525,14 +511,14 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
     }
     *devs = discovered_devs_append(*devs, dev);
   }
-  co_return LIBUSB_SUCCESS;
+  co_return (int) LIBUSB_SUCCESS;
 }
 
 int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
   // No need to wrap into CaughtPromise as we catch all individual ops in the
   // inner implementation and return just the error code.
   return awaitOnMain([ctx, devs]() { return getDeviceList(ctx, devs); })
-      .as<libusb_error>();
+      .as<int>();
 }
 
 int em_open(libusb_device_handle* handle) {
