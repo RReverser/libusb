@@ -382,15 +382,13 @@ struct CachedDevice {
                                   uint8_t desc_index,
                                   uint16_t max_length) const {
     return makeControlTransferPromise(
-        device,
-        {
-            .bmRequestType = LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD |
-                             LIBUSB_RECIPIENT_DEVICE,
-            .bRequest = LIBUSB_REQUEST_GET_DESCRIPTOR,
-            .wValue = ((uint16_t)desc_type << 8) | desc_index,
-            .wIndex = 0,
-            .wLength = max_length,
-        });
+        device, {
+                    .bmRequestType = LIBUSB_ENDPOINT_IN,
+                    .bRequest = LIBUSB_REQUEST_GET_DESCRIPTOR,
+                    .wValue = ((uint16_t)desc_type << 8) | desc_index,
+                    .wIndex = 0,
+                    .wLength = max_length,
+                });
   }
 
   val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
