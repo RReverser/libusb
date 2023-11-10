@@ -122,7 +122,11 @@ auto runOnMain(Func&& func) {
     assert(proxied);
   } else {
     std::optional<std::invoke_result_t<Func>> result;
-    runOnMain([&result, func = std::move(func)]() { result.emplace(func()); });
+    assert(!result.has_value());
+    runOnMain([&result, func = std::move(func)]() {
+      assert(!result.has_value());
+      result.emplace(func());
+    });
     return std::move(result.value());
   }
 }
@@ -195,11 +199,13 @@ static auto awaitOnMain(Func&& func) {
   // multiple threads might be fighting for its state; instead, use proxying
   // to synchronously block the current thread until the promise is complete.
   std::optional<typename PromiseReturnValue<decltype(func())>::Type> result;
+  assert(!result.has_value());
   queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&](auto ctx) {
     // Same as `func` in `runOnMain`, move to destruct on the first call.
     auto func_ = std::move(func);
     promiseThen(func_(),
                 [&result, ctx = std::move(ctx)](auto&& result_) mutable {
+                  assert(!result.has_value());
                   result.emplace(std::move(result_));
                   ctx.finish();
                 });
