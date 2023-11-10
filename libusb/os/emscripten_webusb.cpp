@@ -465,14 +465,12 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
         continue;
       }
 
-      std::optional<CachedDevice> web_usb_device_opt;
-
-      auto result = (co_await CachedDevice::initFromDevice(
+      auto error = (co_await CachedDevice::initFromDevice(
                          std::move(web_usb_device), dev))
                         .as<int>();
-      if (result) {
+      if (error) {
         usbi_err(ctx, "failed to read device information: %s",
-                 libusb_error_name(result));
+                 libusb_error_name(error));
         libusb_unref_device(dev);
         continue;
       }
