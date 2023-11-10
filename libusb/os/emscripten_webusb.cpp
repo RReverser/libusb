@@ -666,43 +666,44 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
       return LIBUSB_TRANSFER_CANCELLED;
     }
 
-    libusb_transfer_status status = LIBUSB_TRANSFER_ERROR;
-
-    if (!result.error) {
-      auto web_usb_transfer_status = result.value["status"].as<std::string>();
-      if (web_usb_transfer_status == "ok") {
-        status = LIBUSB_TRANSFER_COMPLETED;
-      } else if (web_usb_transfer_status == "stall") {
-        status = LIBUSB_TRANSFER_STALL;
-      } else if (web_usb_transfer_status == "babble") {
-        status = LIBUSB_TRANSFER_OVERFLOW;
-      }
-
-      int skip;
-      unsigned char endpointDir;
-
-      if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL) {
-        skip = LIBUSB_CONTROL_SETUP_SIZE;
-        endpointDir =
-            libusb_control_transfer_get_setup(transfer)->bmRequestType;
-      } else {
-        skip = 0;
-        endpointDir = transfer->endpoint;
-      }
-
-      if (endpointDir & LIBUSB_ENDPOINT_IN) {
-        auto data = result.value["data"];
-        if (!data.isNull()) {
-          itransfer->transferred = data["byteLength"].as<int>();
-          copyFromTypedArray(transfer->buffer, Uint8Array.new_(data["buffer"]),
-                             transfer->length, skip);
-        }
-      } else {
-        itransfer->transferred = result.value["bytesWritten"].as<int>();
-      }
+    if (result.error) {
+      return LIBUSB_TRANSFER_ERROR;
     }
 
-    return status;
+    auto& value = result.value;
+
+    int skip;
+    unsigned char endpointDir;
+
+    if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL) {
+      skip = LIBUSB_CONTROL_SETUP_SIZE;
+      endpointDir = libusb_control_transfer_get_setup(transfer)->bmRequestType;
+    } else {
+      skip = 0;
+      endpointDir = transfer->endpoint;
+    }
+
+    if (endpointDir & LIBUSB_ENDPOINT_IN) {
+      auto data = value["data"];
+      if (!data.isNull()) {
+        itransfer->transferred = data["byteLength"].as<int>();
+        copyFromTypedArray(transfer->buffer, Uint8Array.new_(data["buffer"]),
+                           transfer->length, skip);
+      }
+    } else {
+      itransfer->transferred = value["bytesWritten"].as<int>();
+    }
+
+    auto web_usb_transfer_status = value["status"].as<std::string>();
+    if (web_usb_transfer_status == "ok") {
+      return LIBUSB_TRANSFER_COMPLETED;
+    } else if (web_usb_transfer_status == "stall") {
+      return LIBUSB_TRANSFER_STALL;
+    } else if (web_usb_transfer_status == "babble") {
+      return LIBUSB_TRANSFER_OVERFLOW;
+    } else {
+      return LIBUSB_TRANSFER_ERROR;
+    }
   });
 
   // Invoke user's handlers outside of the main thread to reduce pressure.
