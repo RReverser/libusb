@@ -369,10 +369,11 @@ struct CachedDevice {
   }
 
   template <typename... Args>
-  PromiseResult awaitOnMain(const char* methodName, Args&&... args) const {
+  libusb_error awaitOnMain(const char* methodName, Args&&... args) const {
     return ::awaitOnMain([&]() {
-      return callAsyncAndCatch(methodName, std::forward<Args>(args)...);
-    });
+             return callAsyncAndCatch(methodName, std::forward<Args>(args)...);
+           })
+        .error;
   }
 
   ~CachedDevice() {
@@ -474,7 +475,7 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
 }
 
 int em_open(libusb_device_handle* handle) {
-  return WebUsbDevicePtr(handle)->awaitOnMain("open").error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("open");
 }
 
 void em_close(libusb_device_handle* handle) {
@@ -516,37 +517,32 @@ int em_get_config_descriptor_by_value(libusb_device* dev, uint8_t config_value,
 }
 
 int em_set_configuration(libusb_device_handle* dev_handle, int config) {
-  return WebUsbDevicePtr(dev_handle)
-      ->awaitOnMain("setConfiguration", config)
-      .error;
+  return WebUsbDevicePtr(dev_handle)->awaitOnMain("setConfiguration", config);
 }
 
 int em_claim_interface(libusb_device_handle* handle, uint8_t iface) {
-  return WebUsbDevicePtr(handle)->awaitOnMain("claimInterface", iface).error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("claimInterface", iface);
 }
 
 int em_release_interface(libusb_device_handle* handle, uint8_t iface) {
-  return WebUsbDevicePtr(handle)->awaitOnMain("releaseInterface", iface).error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("releaseInterface", iface);
 }
 
 int em_set_interface_altsetting(libusb_device_handle* handle, uint8_t iface,
                                 uint8_t altsetting) {
-  return WebUsbDevicePtr(handle)
-      ->awaitOnMain("selectAlternateInterface", iface, altsetting)
-      .error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("selectAlternateInterface", iface,
+                                              altsetting);
 }
 
 int em_clear_halt(libusb_device_handle* handle, unsigned char endpoint) {
   std::string direction = endpoint & LIBUSB_ENDPOINT_IN ? "in" : "out";
   endpoint &= LIBUSB_ENDPOINT_ADDRESS_MASK;
 
-  return WebUsbDevicePtr(handle)
-      ->awaitOnMain("clearHalt", direction, endpoint)
-      .error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("clearHalt", direction, endpoint);
 }
 
 int em_reset_device(libusb_device_handle* handle) {
-  return WebUsbDevicePtr(handle)->awaitOnMain("reset").error;
+  return WebUsbDevicePtr(handle)->awaitOnMain("reset");
 }
 
 void em_destroy_device(libusb_device* dev) { WebUsbDevicePtr(dev).free(); }
