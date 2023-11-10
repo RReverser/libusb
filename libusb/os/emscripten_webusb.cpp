@@ -131,7 +131,7 @@ auto runOnMain(Func&& func) {
   }
   if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
     bool proxied = queue.proxySync(emscripten_main_runtime_thread_id(),
-                                   [func = std::move(func)]() {
+                                   [func = std::move(func)]() mutable {
                                      // Capture func by reference and move into
                                      // a local variable to render the captured
                                      // func inert on the first (and only) call.
@@ -212,7 +212,7 @@ static std::invoke_result_t<Func>::AwaitResult awaitOnMain(Func&& func) {
   std::optional<typename std::invoke_result_t<Func>::AwaitResult> result;
   queue.proxySyncWithCtx(
       emscripten_main_runtime_thread_id(),
-      [&result, func = std::move(func)](ProxyingQueue::ProxyingCtx ctx) {
+      [&result, func = std::move(func)](ProxyingQueue::ProxyingCtx ctx) mutable {
         // Same as `func` in `runOnMain`, move to destruct on the first call.
         auto func_ = std::move(func);
         promiseThen(func_(),
