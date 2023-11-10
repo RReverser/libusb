@@ -21,10 +21,7 @@
 
 #include <assert.h>
 #include <emscripten.h>
-#include <emscripten/proxying.h>
-#include <emscripten/threading.h>
 #include <emscripten/val.h>
-#include <pthread.h>
 
 #include <type_traits>
 #include <utility>
@@ -122,34 +119,44 @@ auto getUnsharedMemoryView(void* src, size_t len) {
 #endif
 }
 
+#ifdef _REENTRANT
+#include <emscripten/proxying.h>
+#include <emscripten/threading.h>
+#include <pthread.h>
+
 static ProxyingQueue queue;
+#endif
 
 template <typename Func>
 auto runOnMain(Func&& func) {
-  if (emscripten_is_main_runtime_thread()) {
-    return func();
+#ifdef _REENTRANT
+  if (!emscripten_is_main_runtime_thread()) {
+    if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
+      bool proxied =
+          queue.proxySync(emscripten_main_runtime_thread_id(), [&func]() {
+            // Capture func by reference and move into
+            // a local variable to render the captured
+            // func inert on the first (and only) call.
+            // This way it can be safely destructed on
+            // the main thread instead of the current
+            // one when this call finishes.
+            // TODO: remove this when
+            // https://github.com/emscripten-core/emscripten/issues/20610
+            // is fixed.
+            auto func_ = std::move(func);
+            func_();
+          });
+      assert(proxied);
+      return;
+    } else {
+      std::optional<std::invoke_result_t<Func>> result;
+      runOnMain(
+          [&result, func = std::move(func)]() { result.emplace(func()); });
+      return std::move(result.value());
+    }
   }
-  if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
-    bool proxied =
-        queue.proxySync(emscripten_main_runtime_thread_id(), [&func]() {
-          // Capture func by reference and move into
-          // a local variable to render the captured
-          // func inert on the first (and only) call.
-          // This way it can be safely destructed on
-          // the main thread instead of the current
-          // one when this call finishes.
-          // TODO: remove this when
-          // https://github.com/emscripten-core/emscripten/issues/20610
-          // is fixed.
-          auto func_ = std::move(func);
-          func_();
-        });
-    assert(proxied);
-  } else {
-    std::optional<std::invoke_result_t<Func>> result;
-    runOnMain([&result, func = std::move(func)]() { result.emplace(func()); });
-    return std::move(result.value());
-  }
+#endif
+  return func();
 }
 
 // C++ struct representation for {value, error} object from above
@@ -201,27 +208,30 @@ val promiseThen(Promise&& promise, OnResult&& onResult) {
 
 template <typename Func>
 static std::invoke_result_t<Func>::AwaitResult awaitOnMain(Func&& func) {
-  if (emscripten_is_main_runtime_thread()) {
-    // If we're already on the main thread, use Asyncify to block until
-    // the promise is resolved.
-    return func().await();
+#ifdef _REENTRANT
+  if (!emscripten_is_main_runtime_thread()) {
+    // If we're on a different thread, we can't use main thread's Asyncify as
+    // multiple threads might be fighting for its state; instead, use proxying
+    // to synchronously block the current thread until the promise is complete.
+    std::optional<typename std::invoke_result_t<Func>::AwaitResult> result;
+    queue.proxySyncWithCtx(
+        emscripten_main_runtime_thread_id(),
+        [&result, &func](ProxyingQueue::ProxyingCtx ctx) {
+          // Same as `func` in `runOnMain`, move to destruct on
+          // the first call.
+          auto func_ = std::move(func);
+          promiseThen(func_(),
+                      [&result, ctx = std::move(ctx)](auto&& result_) mutable {
+                        result.emplace(std::move(result_));
+                        ctx.finish();
+                      });
+        });
+    return std::move(result.value());
   }
-  // If we're on a different thread, we can't use main thread's Asyncify as
-  // multiple threads might be fighting for its state; instead, use proxying
-  // to synchronously block the current thread until the promise is complete.
-  std::optional<typename std::invoke_result_t<Func>::AwaitResult> result;
-  queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(),
-                         [&result, &func](ProxyingQueue::ProxyingCtx ctx) {
-                           // Same as `func` in `runOnMain`, move to destruct on
-                           // the first call.
-                           auto func_ = std::move(func);
-                           promiseThen(func_(), [&result, ctx = std::move(ctx)](
-                                                    auto&& result_) mutable {
-                             result.emplace(std::move(result_));
-                             ctx.finish();
-                           });
-                         });
-  return std::move(result.value());
+#endif
+  // If we're already on the main thread, use Asyncify to block until
+  // the promise is resolved.
+  return func().await();
 }
 
 val makeControlTransferPromise(const val& dev, libusb_control_setup* setup) {
