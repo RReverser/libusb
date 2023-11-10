@@ -104,7 +104,7 @@ void copyFromTypedArray(void* dst, val src, size_t len, size_t dst_offset = 0) {
 }
 
 val getUnsharedMemoryView(void* src, size_t len) {
-  val view = typed_memory_view(len, (uint8_t*)src);
+  auto view = val(typed_memory_view(len, (uint8_t*)src));
 #ifdef _REENTRANT
   // Unfortunately, TypedArrays backed by SharedArrayBuffers are not accepted
   // by most Web APIs, trading off guaranteed thread-safety for performance
