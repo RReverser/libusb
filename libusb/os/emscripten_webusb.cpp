@@ -99,6 +99,24 @@ namespace {
   });
 // clang-format on
 
+void copyFromTypedArray(void* dst, val src, size_t len) {
+  val(typed_memory_view(len, (uint8_t*)dst)).call<void>("set", src);
+}
+
+val getUnsharedMemoryView(void* src, size_t len) {
+  val view = typed_memory_view(len, (uint8_t*)src);
+#ifdef _REENTRANT
+  // Unfortunately, TypedArrays backed by SharedArrayBuffers are not accepted
+  // by most Web APIs, trading off guaranteed thread-safety for performance
+  // loss. The usual workaround is to copy them into a new TypedArray, which is
+  // what we do here via the `.slice()` method.
+  return view.call<val>("slice");
+#else
+  // Non-threaded builds can avoid the copy penalty.
+  return std::move(view);
+#endif
+}
+
 static ProxyingQueue queue;
 
 template <typename Func>
@@ -273,9 +291,8 @@ struct CachedDevice {
                  libusb_error_name(result.error));
         co_return false;
       }
-      val(typed_memory_view(LIBUSB_DT_DEVICE_SIZE,
-                            (uint8_t*)&dev->device_descriptor))
-          .call<void>("set", result.value);
+      copyFromTypedArray(&dev->device_descriptor, result.value,
+                         LIBUSB_DT_DEVICE_SIZE);
     }
 
     // Infer the device speed (which is not yet provided by WebUSB) from the
@@ -312,8 +329,7 @@ struct CachedDevice {
       auto configLen = configVal["byteLength"].as<size_t>();
       auto& config = configurations.emplace_back(
           (usbi_configuration_descriptor*)::operator new(configLen));
-      val(typed_memory_view(configLen, (uint8_t*)config.get()))
-          .call<void>("set", configVal);
+      copyFromTypedArray(config.get(), configVal, configLen);
     }
 
     co_return true;
@@ -600,10 +616,8 @@ int em_submit_transfer(usbi_transfer* itransfer) {
               "controlTransferIn", std::move(web_usb_control_transfer_params),
               setup->wLength);
         } else {
-          auto data =
-              val(typed_memory_view(setup->wLength,
-                                    libusb_control_transfer_get_data(transfer)))
-                  .call<val>("slice");
+          auto data = getUnsharedMemoryView(
+              libusb_control_transfer_get_data(transfer), setup->wLength);
           transfer_promise = web_usb_device.call<val>(
               "controlTransferOut", std::move(web_usb_control_transfer_params),
               data);
@@ -619,8 +633,7 @@ int em_submit_transfer(usbi_transfer* itransfer) {
           transfer_promise = web_usb_device.call<val>("transferIn", endpoint,
                                                       transfer->length);
         } else {
-          auto data = val(typed_memory_view(transfer->length, transfer->buffer))
-                          .call<val>("slice");
+          auto data = getUnsharedMemoryView(transfer->buffer, transfer->length);
           transfer_promise =
               web_usb_device.call<val>("transferOut", endpoint, data);
         }
@@ -690,8 +703,8 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
         auto data = result.value["data"];
         if (!data.isNull()) {
           itransfer->transferred = data["byteLength"].as<int>();
-          val(typed_memory_view(transfer->length, transfer->buffer))
-              .call<void>("set", Uint8Array.new_(data["buffer"]), skip);
+          copyFromTypedArray(transfer->buffer, Uint8Array.new_(data["buffer"]),
+                             transfer->length);
         }
       } else {
         itransfer->transferred = result.value["bytesWritten"].as<int>();
