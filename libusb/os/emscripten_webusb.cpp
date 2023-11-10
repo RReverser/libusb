@@ -278,10 +278,17 @@ struct CachedDevice {
   CachedDevice() = delete;
   CachedDevice(CachedDevice&&) = default;
 
-  static val initFromDeviceAsync(val&& device, libusb_device* dev) {
-    auto cachedDevicePtr = WebUsbDevicePtr(dev);
-    cachedDevicePtr.emplace(std::move(device));
-    return cachedDevicePtr->initFromDevice(dev);
+  static val initFromDevice(val&& web_usb_dev, libusb_device* libusb_dev) {
+    auto cachedDevicePtr = WebUsbDevicePtr(libusb_dev);
+    cachedDevicePtr.emplace(std::move(web_usb_dev));
+    bool must_close = false;
+    val result =
+        co_await cachedDevicePtr->initFromDeviceWithoutClosing(libusb_dev, must_close);
+    if (must_close) {
+      // close shouldn't fail, so don't bother catching and handling errors.
+      co_await cachedDevicePtr->device.call("close");
+    }
+    co_return std::move(result);
   }
 
   const val& getDeviceAssumingMainThread() const {
@@ -350,7 +357,7 @@ struct CachedDevice {
     return val::take_ownership(handle);
   }
 
-  val initFromDeviceImpl(libusb_device* dev, bool& must_close) {
+  val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
     {
       auto result = PromiseResult(co_await callAsyncAndCatch("open"));
       if (result.error) {
@@ -414,18 +421,6 @@ struct CachedDevice {
     co_return LIBUSB_SUCCESS;
   }
 
-  val initFromDevice(libusb_device* dev) {
-    bool must_close = false;
-    val result = co_await initFromDeviceImpl(dev, must_close);
-    if (must_close) {
-      auto error = PromiseResult(co_await callAsyncAndCatch("close")).error;
-      if (error && !result.as<int>()) {
-        co_return error;
-      }
-    }
-    co_return std::move(result);
-  }
-
   CachedDevice(val device) : device(std::move(device)) {}
 
   friend struct ValPtr<CachedDevice>;
@@ -472,7 +467,7 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
 
       std::optional<CachedDevice> web_usb_device_opt;
 
-      auto result = (co_await CachedDevice::initFromDeviceAsync(
+      auto result = (co_await CachedDevice::initFromDevice(
                          std::move(web_usb_device), dev))
                         .as<int>();
       if (result) {
