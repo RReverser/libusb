@@ -191,7 +191,8 @@ struct CaughtPromise : val {
 
 template <typename Promise, typename OnResult>
 val promiseThen(Promise&& promise, OnResult&& onResult) {
-  onResult(co_await promise);
+  val result = co_await promise;
+  onResult(std::move(result));
   co_return val::undefined();
 }
 
