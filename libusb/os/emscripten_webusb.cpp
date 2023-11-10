@@ -156,8 +156,7 @@ struct CaughtPromise : val {
   CaughtPromise(val&& promise)
       : val(wrapPromiseWithCatch(std::move(promise))) {}
 
-  // Change return type of Asyncify-based await.
-  PromiseResult await() { return val::await(); }
+  using AwaitResult = PromiseResult;
 
  private:
   // Wrap promise with conversion from some value T to {value: T, error:
@@ -175,21 +174,8 @@ val promiseThen(Promise&& promise, OnResult&& onResult) {
   co_return val::undefined();
 }
 
-template <typename Promise>
-struct PromiseReturnValue {};
-
-template <>
-struct PromiseReturnValue<val> {
-  using Type = val;
-};
-
-template <>
-struct PromiseReturnValue<CaughtPromise> {
-  using Type = PromiseResult;
-};
-
 template <typename Func>
-static auto awaitOnMain(Func&& func) {
+static std::invoke_result_t<Func>::AwaitResult awaitOnMain(Func&& func) {
   if (emscripten_is_main_runtime_thread()) {
     // If we're already on the main thread, use Asyncify to block until
     // the promise is resolved.
@@ -198,9 +184,9 @@ static auto awaitOnMain(Func&& func) {
   // If we're on a different thread, we can't use main thread's Asyncify as
   // multiple threads might be fighting for its state; instead, use proxying
   // to synchronously block the current thread until the promise is complete.
-  std::optional<typename PromiseReturnValue<decltype(func())>::Type> result;
+  std::optional<typename std::invoke_result_t<Func>::AwaitResult> result;
   assert(!result.has_value());
-  queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&](auto ctx) {
+  queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&](ProxyingQueue::ProxyingCtx ctx) {
     // Same as `func` in `runOnMain`, move to destruct on the first call.
     auto func_ = std::move(func);
     promiseThen(func_(),
@@ -520,8 +506,21 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
 int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
   // No need to wrap into CaughtPromise as we catch all individual ops in the
   // inner implementation and return just the error code.
-  return awaitOnMain([ctx, devs]() { return getDeviceList(ctx, devs); })
-      .as<int>();
+  // We do need a custom promise type to ensure conversion to int happens on
+  // the main thread though.
+  struct IntPromise : val {
+    IntPromise(val&& promise) : val(std::move(promise)) {}
+
+    struct AwaitResult {
+      int error;
+
+      AwaitResult(val&& result) : error(result.as<int>()) {}
+    };
+  };
+
+  return awaitOnMain(
+             [ctx, devs]() { return IntPromise(getDeviceList(ctx, devs)); })
+      .error;
 }
 
 int em_open(libusb_device_handle* handle) {
