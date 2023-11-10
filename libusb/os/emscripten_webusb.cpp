@@ -308,8 +308,12 @@ struct CachedDevice {
                  libusb_error_name(result.error));
         co_return false;
       }
-      configurations.push_back(
-          convertJSArrayToNumberVector<uint8_t>(result.value));
+      auto& configVal = result.value;
+      auto configLen = configVal["byteLength"].as<size_t>();
+      auto& config = configurations.emplace_back(
+          (usbi_configuration_descriptor*)::operator new(configLen));
+      val(typed_memory_view(configLen, (uint8_t*)config.get()))
+          .call<void>("set", configVal);
     }
 
     co_return true;
@@ -337,35 +341,26 @@ struct CachedDevice {
     });
   }
 
-  int getConfigDescriptor(uint8_t config_id, void** buf) {
-    if (config_id > configurations.size()) {
-      return LIBUSB_ERROR_NOT_FOUND;
-    }
-    auto& config = configurations[config_id];
-    *buf = config.data();
-    return config.size();
+  usbi_configuration_descriptor* getConfigDescriptor(uint8_t config_id) {
+    return config_id < configurations.size() ? configurations[config_id].get()
+                                             : nullptr;
   }
 
-  int getConfigDescriptor(uint8_t config_id, void* buf, size_t buf_len) {
-    void* src;
-    int src_len = getConfigDescriptor(config_id, &src);
-    if (src_len < 0) {
-      return src_len;
-    }
-    auto len = std::min((int)buf_len, src_len);
-    memcpy(buf, src, len);
-    return len;
-  }
-
-  int findConfigDescriptorByValue(uint8_t config_id) const {
-    for (size_t i = 0; i < configurations.size(); i++) {
-      auto config_descriptor =
-          (libusb_config_descriptor*)configurations[i].data();
-      if (config_descriptor->bConfigurationValue == config_id) {
-        return i;
+  usbi_configuration_descriptor* findConfigDescriptorByValue(
+      uint8_t config_id) const {
+    for (auto& config : configurations) {
+      if (config->bConfigurationValue == config_id) {
+        return config.get();
       }
     }
-    return LIBUSB_ERROR_NOT_FOUND;
+    return nullptr;
+  }
+
+  int copyConfigDescriptor(const usbi_configuration_descriptor* config,
+                           void* buf, size_t buf_len) {
+    auto len = std::min(buf_len, (size_t)config->wTotalLength);
+    memcpy(buf, config, len);
+    return len;
   }
 
   template <typename... Args>
@@ -382,7 +377,7 @@ struct CachedDevice {
 
  private:
   val device;
-  std::vector<std::vector<uint8_t>> configurations;
+  std::vector<std::unique_ptr<usbi_configuration_descriptor>> configurations;
 
   template <typename... Args>
   CaughtPromise callAsyncAndCatch(const char* methodName,
@@ -488,16 +483,20 @@ void em_close(libusb_device_handle* handle) {
 int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
   auto& cached_device = *WebUsbDevicePtr(dev);
   auto config_value = cached_device.getActiveConfigValue();
-  auto config_id = cached_device.findConfigDescriptorByValue(config_value);
-  if (config_id < 0) {
-    return config_id;
+  if (auto config = cached_device.findConfigDescriptorByValue(config_value)) {
+    return cached_device.copyConfigDescriptor(config, buf, len);
+  } else {
+    return LIBUSB_ERROR_NOT_FOUND;
   }
-  return cached_device.getConfigDescriptor(config_id, buf, len);
 }
 
 int em_get_config_descriptor(libusb_device* dev, uint8_t config_id, void* buf,
                              size_t len) {
-  return WebUsbDevicePtr(dev)->getConfigDescriptor(config_id, buf, len);
+  if (auto config = WebUsbDevicePtr(dev)->getConfigDescriptor(config_id)) {
+    return WebUsbDevicePtr(dev)->copyConfigDescriptor(config, buf, len);
+  } else {
+    return LIBUSB_ERROR_NOT_FOUND;
+  }
 }
 
 int em_get_configuration(libusb_device_handle* dev_handle,
@@ -509,11 +508,12 @@ int em_get_configuration(libusb_device_handle* dev_handle,
 int em_get_config_descriptor_by_value(libusb_device* dev, uint8_t config_value,
                                       void** buf) {
   auto& cached_device = *WebUsbDevicePtr(dev);
-  auto config_id = cached_device.findConfigDescriptorByValue(config_value);
-  if (config_id < 0) {
-    return config_id;
+  if (auto config = cached_device.findConfigDescriptorByValue(config_value)) {
+    *buf = &config;
+    return LIBUSB_SUCCESS;
+  } else {
+    return LIBUSB_ERROR_NOT_FOUND;
   }
-  return cached_device.getConfigDescriptor(config_id, buf);
 }
 
 int em_set_configuration(libusb_device_handle* dev_handle, int config) {
