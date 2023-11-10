@@ -191,8 +191,11 @@ struct CaughtPromise : val {
 
 template <typename Promise, typename OnResult>
 val promiseThen(Promise&& promise, OnResult&& onResult) {
+  // Save captures from the callback while we can, or they'll be destructed.
+  // https://devblogs.microsoft.com/oldnewthing/20211103-00/?p=105870
+  auto onResult_ = std::move(onResult);
   val result = co_await promise;
-  onResult(std::move(result));
+  onResult_(std::move(result));
   co_return val::undefined();
 }
 
