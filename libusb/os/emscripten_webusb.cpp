@@ -30,6 +30,14 @@
 
 using namespace emscripten;
 
+#ifdef _REENTRANT
+#include <emscripten/proxying.h>
+#include <emscripten/threading.h>
+#include <pthread.h>
+
+static ProxyingQueue queue;
+#endif
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-prototypes"
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -118,14 +126,6 @@ auto getUnsharedMemoryView(void* src, size_t len) {
   return std::move(view);
 #endif
 }
-
-#ifdef _REENTRANT
-#include <emscripten/proxying.h>
-#include <emscripten/threading.h>
-#include <pthread.h>
-
-static ProxyingQueue queue;
-#endif
 
 template <typename Func>
 auto runOnMain(Func&& func) {
