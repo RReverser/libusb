@@ -282,8 +282,8 @@ struct CachedDevice {
     auto cachedDevicePtr = WebUsbDevicePtr(libusb_dev);
     cachedDevicePtr.emplace(std::move(web_usb_dev));
     bool must_close = false;
-    val result =
-        co_await cachedDevicePtr->initFromDeviceWithoutClosing(libusb_dev, must_close);
+    val result = co_await cachedDevicePtr->initFromDeviceWithoutClosing(
+        libusb_dev, must_close);
     if (must_close) {
       // close shouldn't fail, so don't bother catching and handling errors.
       co_await cachedDevicePtr->device.call("close");
@@ -466,8 +466,8 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
       }
 
       auto error = (co_await CachedDevice::initFromDevice(
-                         std::move(web_usb_device), dev))
-                        .as<int>();
+                        std::move(web_usb_device), dev))
+                       .as<int>();
       if (error) {
         usbi_err(ctx, "failed to read device information: %s",
                  libusb_error_name(error));
@@ -510,8 +510,9 @@ int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
 
 int em_get_config_descriptor(libusb_device* dev, uint8_t config_id, void* buf,
                              size_t len) {
-  if (auto config = WebUsbDevicePtr(dev)->getConfigDescriptor(config_id)) {
-    return WebUsbDevicePtr(dev)->copyConfigDescriptor(config, buf, len);
+  auto& cached_device = *WebUsbDevicePtr(dev);
+  if (auto config = cached_device.getConfigDescriptor(config_id)) {
+    return cached_device.copyConfigDescriptor(config, buf, len);
   } else {
     return LIBUSB_ERROR_NOT_FOUND;
   }
