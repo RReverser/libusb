@@ -108,19 +108,18 @@ auto runOnMain(Func&& func) {
     return func();
   }
   if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
-    assert(queue.proxySync(emscripten_main_runtime_thread_id(),
-                           [func_ = std::move(func)]() {
-                             // Move again into local variable to render the
-                             // captured func inert on the first (and only)
-                             // call. This way it can be safely destructed on
-                             // the main thread instead of the current one when
-                             // this call finishes.
-                             // TODO: remove this when
-                             // https://github.com/emscripten-core/emscripten/issues/20610
-                             // is fixed.
-                             auto func = std::move(func_);
-                             func();
-                           }));
+    bool proxied = queue.proxySync(emscripten_main_runtime_thread_id(), [&]() {
+      // Capture func by reference and move into a local variable to render
+      // the captured func inert on the first (and only) call. This way it
+      // can be safely destructed on the main thread instead of the current
+      // one when this call finishes.
+      // TODO: remove this when
+      // https://github.com/emscripten-core/emscripten/issues/20610 is
+      // fixed.
+      auto func_ = std::move(func);
+      func_();
+    });
+    assert(proxied);
   } else {
     std::optional<std::invoke_result_t<Func>> result;
     runOnMain([&result, func = std::move(func)]() { result.emplace(func()); });
@@ -196,17 +195,15 @@ static auto awaitOnMain(Func&& func) {
   // multiple threads might be fighting for its state; instead, use proxying
   // to synchronously block the current thread until the promise is complete.
   std::optional<typename PromiseReturnValue<decltype(func())>::Type> result;
-  assert(queue.proxySyncWithCtx(
-      emscripten_main_runtime_thread_id(),
-      [&result, func_ = std::move(func)](ProxyingQueue::ProxyingCtx ctx) {
-        // Same as `func` in `runOnMain`, move to destruct on the first call.
-        auto func = std::move(func_);
-        promiseThen(func(),
-                    [&result, ctx = std::move(ctx)](auto&& result_) mutable {
-                      result.emplace(std::move(result_));
-                      ctx.finish();
-                    });
-      }));
+  queue.proxySyncWithCtx(emscripten_main_runtime_thread_id(), [&](auto ctx) {
+    // Same as `func` in `runOnMain`, move to destruct on the first call.
+    auto func_ = std::move(func);
+    promiseThen(func_(),
+                [&result, ctx = std::move(ctx)](auto&& result_) mutable {
+                  result.emplace(std::move(result_));
+                  ctx.finish();
+                });
+  });
   return std::move(result.value());
 }
 
