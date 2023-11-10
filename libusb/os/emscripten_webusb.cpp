@@ -80,14 +80,19 @@ namespace {
     );
     return Emval.toHandle(promise);
 	});
+
+  EM_JS(void, em_copy_from_dataview_impl, (void* dst, EM_VAL src), {
+    src = Emval.toValue(src);
+    src = new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+    HEAPU8.set(src, dst);
+  });
 // clang-format on
 
-void copyFromDataView(void* dst, const val& src, size_t len,
-                      size_t dst_offset = 0) {
-  thread_local const val Uint8Array = val::global("Uint8Array");
-
-  val(typed_memory_view(len, (uint8_t*)dst))
-      .call<void>("set", Uint8Array.new_(src), dst_offset);
+// Note: this assumes that `dst` is valid for at least `src.byteLength` bytes.
+// This is true for all results returned from WebUSB as we pass max length to
+// the transfer APIs.
+void copyFromDataView(void* dst, const val& src) {
+  em_copy_from_dataview_impl(dst, src.as_handle());
 }
 
 auto getUnsharedMemoryView(void* src, size_t len) {
@@ -404,8 +409,7 @@ struct CachedDevice {
       if (result.error) {
         co_return result.error;
       }
-      copyFromDataView(&dev->device_descriptor, result.value,
-                       LIBUSB_DT_DEVICE_SIZE);
+      copyFromDataView(&dev->device_descriptor, result.value["data"]);
     }
 
     // Infer the device speed (which is not yet provided by WebUSB) from the
@@ -439,11 +443,11 @@ struct CachedDevice {
       if (result.error) {
         co_return result.error;
       }
-      auto& configVal = result.value;
+      auto& configVal = result.value["data"];
       auto configLen = configVal["byteLength"].as<size_t>();
       auto& config = configurations.emplace_back(
           (usbi_configuration_descriptor*)::operator new(configLen));
-      copyFromDataView(config.get(), configVal, configLen);
+      copyFromDataView(config.get(), configVal);
     }
 
     co_return (int) LIBUSB_SUCCESS;
@@ -690,8 +694,7 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
       auto data = value["data"];
       if (!data.isNull()) {
         itransfer->transferred = data["byteLength"].as<int>();
-        copyFromDataView(transfer->buffer, data["buffer"], transfer->length,
-                         skip);
+        copyFromDataView(transfer->buffer + skip, data);
       }
     } else {
       itransfer->transferred = value["bytesWritten"].as<int>();
