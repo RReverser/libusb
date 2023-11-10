@@ -211,7 +211,7 @@ static auto awaitOnMain(Func&& func) {
   return std::move(result.value());
 }
 
-val makeControlTransferPromise(const val& dev, libusb_control_setup setup) {
+val makeControlTransferPromise(const val& dev, libusb_control_setup* setup) {
   auto params = val::object();
 
   const char* request_type = "unknown";
@@ -251,9 +251,10 @@ val makeControlTransferPromise(const val& dev, libusb_control_setup setup) {
   if (setup->bmRequestType & LIBUSB_ENDPOINT_IN) {
     return dev.call<val>("controlTransferIn", params, setup->wLength);
   } else {
-    auto data = getUnsharedMemoryView(
-        libusb_control_transfer_get_data(transfer), setup->wLength);
-    return dev.call<val>("controlTransferOut", params, data);
+    return dev.call<val>(
+        "controlTransferOut", params,
+        getUnsharedMemoryView((uint8_t*)setup + LIBUSB_CONTROL_SETUP_SIZE,
+                              setup->wLength));
   }
 }
 
@@ -315,7 +316,7 @@ struct CachedDevice {
         libusb_dev, must_close);
     if (must_close) {
       // close shouldn't fail, so don't bother catching and handling errors.
-      co_await cachedDevicePtr->device.call("close");
+      co_await cachedDevicePtr->device.call<val>("close");
     }
     co_return std::move(result);
   }
@@ -381,14 +382,14 @@ struct CachedDevice {
   CaughtPromise requestDescriptor(libusb_descriptor_type desc_type,
                                   uint8_t desc_index,
                                   uint16_t max_length) const {
-    return makeControlTransferPromise(
-        device, {
-                    .bmRequestType = LIBUSB_ENDPOINT_IN,
-                    .bRequest = LIBUSB_REQUEST_GET_DESCRIPTOR,
-                    .wValue = ((uint16_t)desc_type << 8) | desc_index,
-                    .wIndex = 0,
-                    .wLength = max_length,
-                });
+    libusb_control_setup setup = {
+        .bmRequestType = LIBUSB_ENDPOINT_IN,
+        .bRequest = LIBUSB_REQUEST_GET_DESCRIPTOR,
+        .wValue = (uint16_t)((desc_type << 8) | desc_index),
+        .wIndex = 0,
+        .wLength = max_length,
+    };
+    return makeControlTransferPromise(device, &setup);
   }
 
   val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
@@ -611,7 +612,7 @@ int em_submit_transfer(usbi_transfer* itransfer) {
     switch (transfer->type) {
       case LIBUSB_TRANSFER_TYPE_CONTROL: {
         transfer_promise = makeControlTransferPromise(
-            web_usb_device, *libusb_control_transfer_get_setup(transfer));
+            web_usb_device, libusb_control_transfer_get_setup(transfer));
         break;
       }
       case LIBUSB_TRANSFER_TYPE_BULK:
