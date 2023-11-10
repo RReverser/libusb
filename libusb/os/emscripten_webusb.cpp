@@ -231,7 +231,10 @@ static auto awaitOnMain(Func&& func) {
 template <typename T>
 struct ValPtr {
  public:
-  void init_to(T&& value) { new (ptr) T(std::move(value)); }
+  template <typename... Args>
+  void emplace(Args&&... args) {
+    new (ptr) T(std::forward<Args>(args)...);
+  }
 
   const T& operator*() const { return *ptr; }
   T& operator*() { return *ptr; }
@@ -256,96 +259,34 @@ struct ValPtr {
   T* ptr;
 };
 
+struct CachedDevice;
+
+struct WebUsbDevicePtr : ValPtr<CachedDevice> {
+ public:
+  WebUsbDevicePtr(libusb_device* dev) : ValPtr(usbi_get_device_priv(dev)) {}
+  WebUsbDevicePtr(libusb_device_handle* handle)
+      : WebUsbDevicePtr(handle->dev) {}
+};
+
+struct WebUsbTransferPtr : ValPtr<PromiseResult> {
+ public:
+  WebUsbTransferPtr(usbi_transfer* itransfer)
+      : ValPtr(usbi_get_transfer_priv(itransfer)) {}
+};
+
 struct CachedDevice {
   CachedDevice() = delete;
   CachedDevice(CachedDevice&&) = default;
 
-  CachedDevice(val device) : device(std::move(device)) {}
+  static val initFromDeviceAsync(val&& device, libusb_device* dev) {
+    auto cachedDevicePtr = WebUsbDevicePtr(dev);
+    cachedDevicePtr.emplace(std::move(device));
+    return cachedDevicePtr->initFromDevice(dev);
+  }
 
   const val& getDeviceAssumingMainThread() const {
     assert(emscripten_is_main_runtime_thread());
     return device;
-  }
-
-  val initFromDeviceImpl(libusb_context* ctx, libusb_device* dev,
-                         bool& must_close) {
-    {
-      auto result = PromiseResult(co_await callAsyncAndCatch("open"));
-      if (result.error) {
-        usbi_err(ctx, "failed to open device: %s",
-                 libusb_error_name(result.error));
-        co_return false;
-      }
-    }
-
-    // Can't use RAII to close on exit as co_await is not permitted in
-    // destructors (yet: https://github.com/cplusplus/papers/issues/445),
-    // so use a good old boolean + a wrapper instead.
-    must_close = true;
-
-    {
-      auto result = PromiseResult(co_await requestDescriptor(
-          LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE));
-      if (result.error) {
-        usbi_err(ctx, "failed to get device descriptor: %s",
-                 libusb_error_name(result.error));
-        co_return false;
-      }
-      copyFromTypedArray(&dev->device_descriptor, result.value,
-                         LIBUSB_DT_DEVICE_SIZE);
-    }
-
-    // Infer the device speed (which is not yet provided by WebUSB) from the
-    // descriptor.
-    if (dev->device_descriptor.bMaxPacketSize0 ==
-        /* actually means 2^9, only valid for superspeeds */ 9) {
-      dev->speed = dev->device_descriptor.bcdUSB >= 0x0310
-                       ? LIBUSB_SPEED_SUPER_PLUS
-                       : LIBUSB_SPEED_SUPER;
-    } else if (dev->device_descriptor.bcdUSB >= 0x0200) {
-      dev->speed = LIBUSB_SPEED_HIGH;
-    } else if (dev->device_descriptor.bMaxPacketSize0 > 8) {
-      dev->speed = LIBUSB_SPEED_FULL;
-    } else {
-      dev->speed = LIBUSB_SPEED_LOW;
-    }
-
-    if (usbi_sanitize_device(dev) < 0) {
-      co_return false;
-    }
-
-    auto configurations_len = dev->device_descriptor.bNumConfigurations;
-    configurations.reserve(configurations_len);
-    for (uint8_t j = 0; j < configurations_len; j++) {
-      auto result = PromiseResult(
-          co_await requestDescriptor(LIBUSB_DT_CONFIG, j,
-                                     /* MAX_CTRL_BUFFER_LENGTH */ 4096));
-      if (result.error) {
-        usbi_err(ctx, "failed to get config descriptor %i: %s", j,
-                 libusb_error_name(result.error));
-        co_return false;
-      }
-      auto& configVal = result.value;
-      auto configLen = configVal["byteLength"].as<size_t>();
-      auto& config = configurations.emplace_back(
-          (usbi_configuration_descriptor*)::operator new(configLen));
-      copyFromTypedArray(config.get(), configVal, configLen);
-    }
-
-    co_return true;
-  }
-
-  val initFromDevice(libusb_context* ctx, libusb_device* dev) {
-    bool must_close = false;
-    val result = co_await initFromDeviceImpl(ctx, dev, must_close);
-    if (must_close) {
-      auto error = PromiseResult(co_await callAsyncAndCatch("close")).error;
-      if (error) {
-        usbi_err(ctx, "failed to close device: %s", libusb_error_name(error));
-        co_return error;
-      }
-    }
-    co_return std::move(result);
   }
 
   uint8_t getActiveConfigValue() const {
@@ -408,19 +349,86 @@ struct CachedDevice {
         max_length);
     return val::take_ownership(handle);
   }
-};
 
-struct WebUsbDevicePtr : ValPtr<CachedDevice> {
- public:
-  WebUsbDevicePtr(libusb_device* dev) : ValPtr(usbi_get_device_priv(dev)) {}
-  WebUsbDevicePtr(libusb_device_handle* handle)
-      : WebUsbDevicePtr(handle->dev) {}
-};
+  val initFromDeviceImpl(libusb_device* dev, bool& must_close) {
+    {
+      auto result = PromiseResult(co_await callAsyncAndCatch("open"));
+      if (result.error) {
+        co_return result.error;
+      }
+    }
 
-struct WebUsbTransferPtr : ValPtr<PromiseResult> {
- public:
-  WebUsbTransferPtr(usbi_transfer* itransfer)
-      : ValPtr(usbi_get_transfer_priv(itransfer)) {}
+    // Can't use RAII to close on exit as co_await is not permitted in
+    // destructors (yet: https://github.com/cplusplus/papers/issues/445),
+    // so use a good old boolean + a wrapper instead.
+    must_close = true;
+
+    {
+      auto result = PromiseResult(co_await requestDescriptor(
+          LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE));
+      if (result.error) {
+        co_return result.error;
+      }
+      copyFromTypedArray(&dev->device_descriptor, result.value,
+                         LIBUSB_DT_DEVICE_SIZE);
+    }
+
+    // Infer the device speed (which is not yet provided by WebUSB) from the
+    // descriptor.
+    if (dev->device_descriptor.bMaxPacketSize0 ==
+        /* actually means 2^9, only valid for superspeeds */ 9) {
+      dev->speed = dev->device_descriptor.bcdUSB >= 0x0310
+                       ? LIBUSB_SPEED_SUPER_PLUS
+                       : LIBUSB_SPEED_SUPER;
+    } else if (dev->device_descriptor.bcdUSB >= 0x0200) {
+      dev->speed = LIBUSB_SPEED_HIGH;
+    } else if (dev->device_descriptor.bMaxPacketSize0 > 8) {
+      dev->speed = LIBUSB_SPEED_FULL;
+    } else {
+      dev->speed = LIBUSB_SPEED_LOW;
+    }
+
+    {
+      auto error = usbi_sanitize_device(dev);
+      if (error) {
+        co_return error;
+      }
+    }
+
+    auto configurations_len = dev->device_descriptor.bNumConfigurations;
+    configurations.reserve(configurations_len);
+    for (uint8_t j = 0; j < configurations_len; j++) {
+      auto result = PromiseResult(
+          co_await requestDescriptor(LIBUSB_DT_CONFIG, j,
+                                     /* MAX_CTRL_BUFFER_LENGTH */ 4096));
+      if (result.error) {
+        co_return result.error;
+      }
+      auto& configVal = result.value;
+      auto configLen = configVal["byteLength"].as<size_t>();
+      auto& config = configurations.emplace_back(
+          (usbi_configuration_descriptor*)::operator new(configLen));
+      copyFromTypedArray(config.get(), configVal, configLen);
+    }
+
+    co_return LIBUSB_SUCCESS;
+  }
+
+  val initFromDevice(libusb_device* dev) {
+    bool must_close = false;
+    val result = co_await initFromDeviceImpl(dev, must_close);
+    if (must_close) {
+      auto error = PromiseResult(co_await callAsyncAndCatch("close")).error;
+      if (error && !result.as<int>()) {
+        co_return error;
+      }
+    }
+    co_return std::move(result);
+  }
+
+  CachedDevice(val device) : device(std::move(device)) {}
+
+  friend struct ValPtr<CachedDevice>;
 };
 
 val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
@@ -462,16 +470,17 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
         continue;
       }
 
-      auto cachedDevice = CachedDevice(std::move(web_usb_device));
+      std::optional<CachedDevice> web_usb_device_opt;
 
-      val initialized = co_await cachedDevice.initFromDevice(ctx, dev);
-
-      if (!initialized.as<bool>()) {
+      auto result = (co_await CachedDevice::initFromDeviceAsync(
+                         std::move(web_usb_device), dev))
+                        .as<int>();
+      if (result) {
+        usbi_err(ctx, "failed to read device information: %s",
+                 libusb_error_name(result));
         libusb_unref_device(dev);
         continue;
       }
-
-      WebUsbDevicePtr(dev).init_to(std::move(cachedDevice));
     }
     *devs = discovered_devs_append(*devs, dev);
   }
@@ -648,7 +657,7 @@ int em_submit_transfer(usbi_transfer* itransfer) {
     // schedule an asynchronous callback.
     promiseThen(CaughtPromise(std::move(transfer_promise)),
                 [itransfer](auto&& result) {
-                  WebUsbTransferPtr(itransfer).init_to(std::move(result));
+                  WebUsbTransferPtr(itransfer).emplace(std::move(result));
                   usbi_signal_transfer_completion(itransfer);
                 });
     return LIBUSB_SUCCESS;
