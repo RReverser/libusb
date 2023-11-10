@@ -99,8 +99,8 @@ namespace {
   });
 // clang-format on
 
-void copyFromTypedArray(void* dst, val src, size_t len) {
-  val(typed_memory_view(len, (uint8_t*)dst)).call<void>("set", src);
+void copyFromTypedArray(void* dst, val src, size_t len, size_t dst_offset = 0) {
+  val(typed_memory_view(len, (uint8_t*)dst)).call<void>("set", src, dst_offset);
 }
 
 val getUnsharedMemoryView(void* src, size_t len) {
@@ -704,7 +704,7 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
         if (!data.isNull()) {
           itransfer->transferred = data["byteLength"].as<int>();
           copyFromTypedArray(transfer->buffer, Uint8Array.new_(data["buffer"]),
-                             transfer->length);
+                             transfer->length, skip);
         }
       } else {
         itransfer->transferred = result.value["bytesWritten"].as<int>();
