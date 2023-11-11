@@ -706,14 +706,14 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
 
     auto& value = result.value;
 
-    int skip;
+    void *dataDest;
     unsigned char endpointDir;
 
     if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL) {
-      skip = LIBUSB_CONTROL_SETUP_SIZE;
+      dataDest = libusb_control_transfer_get_data(dataDest);
       endpointDir = libusb_control_transfer_get_setup(transfer)->bmRequestType;
     } else {
-      skip = 0;
+      dataDest = transfer->buffer;
       endpointDir = transfer->endpoint;
     }
 
@@ -721,7 +721,7 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
       auto data = value["data"];
       if (!data.isNull()) {
         itransfer->transferred = data["byteLength"].as<int>();
-        copyFromDataView(transfer->buffer + skip, data);
+        copyFromDataView(dataDest, data);
       }
     } else {
       itransfer->transferred = value["bytesWritten"].as<int>();
