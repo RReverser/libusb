@@ -83,7 +83,14 @@ case $host in
 	backend=haiku
 	platform=posix
 	;;
-wasm32-**)
+wasm32)
+	AC_MSG_ERROR([
+--host=wasm32 used to be recommended and assumed Emscripten backend.
+This is no longer accepted as we might add more WebAssembly backends in the future.
+Please use an explicit --host=wasm32-unknown-emscripten instead.
+	])
+	;;
+*-emscripten)
 	AC_MSG_RESULT([Emscripten])
 	backend=emscripten
 	platform=posix
