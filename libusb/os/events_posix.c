@@ -37,13 +37,10 @@
  *
  * Therefore use a custom event system based on browser event emitters. */
 #include <emscripten.h>
+#include <emscripten/atomic.h>
 #include <emscripten/threading.h>
 
 static int em_libusb_notification_atomic = 0;
-
-EM_JS(void, em_libusb_notify, (int* atomic_ptr), {
-	Atomics.notify(HEAP32, atomic_ptr >> 2);
-});
 
 EM_ASYNC_JS(int, em_libusb_wait_async, (int* atomic_ptr, int timeout), {
 	return (await Atomics.waitAsync(HEAP32, atomic_ptr >> 2, 0, timeout).value) === 'ok';
@@ -54,7 +51,7 @@ static int em_libusb_wait(int timeout)
 	if (emscripten_is_main_browser_thread()) {
 		return em_libusb_wait_async(&em_libusb_notification_atomic, timeout);
 	} else {
-		return __builtin_wasm_memory_atomic_wait32(&em_libusb_notification_atomic, 0, timeout) == 0;
+		return emscripten_atomic_wait_u32(&em_libusb_notification_atomic, 0, timeout) == ATOMICS_WAIT_OK;
 	}
 }
 #endif
@@ -162,7 +159,7 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
-	em_libusb_notify(&em_libusb_notification_atomic);
+	emscripten_atomic_notify(&em_libusb_notification_atomic, EMSCRIPTEN_NOTIFY_ALL_WAITERS);
 #endif
 }
 
