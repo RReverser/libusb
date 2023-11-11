@@ -40,7 +40,7 @@
 #include <emscripten/atomic.h>
 #include <emscripten/threading.h>
 
-static int em_libusb_notification_atomic = 0;
+static const int em_libusb_notification_atomic = 0;
 
 EM_ASYNC_JS(int, em_libusb_wait_async, (int* atomic_ptr, int timeout), {
 	return (await Atomics.waitAsync(HEAP32, atomic_ptr >> 2, 0, timeout).value) === 'ok';
