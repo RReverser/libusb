@@ -486,8 +486,6 @@ struct CachedDevice {
   friend struct ValPtr<CachedDevice>;
 };
 
-struct my {};
-
 val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
   // C++ equivalent of `await navigator.usb.getDevices()`. Note: at this point
   // we must already have some devices exposed - caller must have called `await
