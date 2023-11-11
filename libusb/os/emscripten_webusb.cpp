@@ -116,10 +116,10 @@ void copyFromDataView(void* dst, const val& src) {
 auto getUnsharedMemoryView(void* src, size_t len) {
   auto view = typed_memory_view(len, (uint8_t*)src);
 #ifdef _REENTRANT
-  // Unfortunately, TypedArrays backed by SharedArrayBuffers are not accepted
-  // by most Web APIs, trading off guaranteed thread-safety for performance
-  // loss. The usual workaround is to copy them into a new TypedArray, which is
-  // what we do here via the `.slice()` method.
+  // Unfortunately, TypedArrays backed by SharedArrayBuffers are not accepted by
+  // most Web APIs, trading off guaranteed thread-safety for performance loss.
+  // The usual workaround is to copy them into a new TypedArray, which is what
+  // we do here via the `.slice()` method.
   return val(view).call<val>("slice");
 #else
   // Non-threaded builds can avoid the copy penalty.
@@ -134,15 +134,12 @@ auto runOnMain(Func&& func) {
     if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
       bool proxied =
           queue.proxySync(emscripten_main_runtime_thread_id(), [&func]() {
-            // Capture func by reference and move into
-            // a local variable to render the captured
-            // func inert on the first (and only) call.
-            // This way it can be safely destructed on
-            // the main thread instead of the current
-            // one when this call finishes.
-            // TODO: remove this when
-            // https://github.com/emscripten-core/emscripten/issues/20610
-            // is fixed.
+            // Capture func by reference and move into a local variable to
+            // render the captured func inert on the first (and only) call. This
+            // way it can be safely destructed on the main thread instead of the
+            // current one when this call finishes. TODO: remove this when
+            // https://github.com/emscripten-core/emscripten/issues/20610 is
+            // fixed.
             auto func_ = std::move(func);
             func_();
           });
@@ -159,7 +156,8 @@ auto runOnMain(Func&& func) {
   return func();
 }
 
-// C++ struct representation for `{value, error}` object used by `CaughtPromise` below.
+// C++ struct representation for `{value, error}` object used by `CaughtPromise`
+// below.
 struct PromiseResult {
   int error;
   val value;
@@ -177,9 +175,9 @@ struct PromiseResult {
 };
 
 // TODO: change upstream implementation to use co_await instead of
-// await_transform to make subclassing easier so that co_await
-// on CaughtPromise could do the transform to PromiseResult automatically.
-// See https://github.com/emscripten-core/emscripten/pull/20682.
+// await_transform to make subclassing easier so that co_await on CaughtPromise
+// could do the transform to PromiseResult automatically. See
+// https://github.com/emscripten-core/emscripten/pull/20682.
 struct CaughtPromise : val {
   CaughtPromise(val&& promise)
       : val(wrapPromiseWithCatch(std::move(promise))) {}
@@ -187,7 +185,8 @@ struct CaughtPromise : val {
   using AwaitResult = PromiseResult;
 
  private:
-  // Wrap promise with conversion from some value T to `{value: T, error: number}`.
+  // Wrap promise with conversion from some value T to `{value: T, error:
+  // number}`.
   static val wrapPromiseWithCatch(val&& promise) {
     auto handle = promise.as_handle();
     handle = em_promise_catch_impl(handle);
@@ -219,8 +218,7 @@ static std::invoke_result_t<Func>::AwaitResult awaitOnMain(Func&& func) {
     queue.proxySyncWithCtx(
         emscripten_main_runtime_thread_id(),
         [&result, &func](ProxyingQueue::ProxyingCtx ctx) {
-          // Same as `func` in `runOnMain`, move to destruct on
-          // the first call.
+          // Same as `func` in `runOnMain`, move to destruct on the first call.
           auto func_ = std::move(func);
           promiseThen(func_(),
                       [&result, ctx = std::move(ctx)](auto&& result_) mutable {
@@ -231,8 +229,8 @@ static std::invoke_result_t<Func>::AwaitResult awaitOnMain(Func&& func) {
     return std::move(result.value());
   }
 #endif
-  // If we're already on the main thread, use Asyncify to block until
-  // the promise is resolved.
+  // If we're already on the main thread, use Asyncify to block until the
+  // promise is resolved.
   return func().await();
 }
 
@@ -240,8 +238,7 @@ val makeControlTransferPromise(const val& dev, libusb_control_setup* setup) {
   auto params = val::object();
 
   const char* request_type = "unknown";
-  // See LIBUSB_REQ_TYPE in windows_winusb.h (or docs for
-  // `bmRequestType`).
+  // See LIBUSB_REQ_TYPE in windows_winusb.h (or docs for `bmRequestType`).
   switch (setup->bmRequestType & (0x03 << 5)) {
     case LIBUSB_REQUEST_TYPE_STANDARD:
       request_type = "standard";
@@ -283,7 +280,8 @@ val makeControlTransferPromise(const val& dev, libusb_control_setup* setup) {
   }
 }
 
-// Smart pointer for managing pointers to places allocated by libusb inside its backend structures.
+// Smart pointer for managing pointers to places allocated by libusb inside its
+// backend structures.
 template <typename T>
 struct ValPtr {
   template <typename... Args>
@@ -426,8 +424,8 @@ struct CachedDevice {
     }
 
     // Can't use RAII to close on exit as co_await is not permitted in
-    // destructors (yet: https://github.com/cplusplus/papers/issues/445),
-    // so use a good old boolean + a wrapper instead.
+    // destructors (yet: https://github.com/cplusplus/papers/issues/445), so use
+    // a good old boolean + a wrapper instead.
     must_close = true;
 
     {
@@ -488,12 +486,13 @@ struct CachedDevice {
   friend struct ValPtr<CachedDevice>;
 };
 
+struct my {};
+
 val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
-  // C++ equivalent of `await navigator.usb.getDevices()`.
-  // Note: at this point we must already have some devices exposed -
-  // caller must have called `await navigator.usb.requestDevice(...)`
-  // in response to user interaction before going to LibUSB.
-  // Otherwise this list will be empty.
+  // C++ equivalent of `await navigator.usb.getDevices()`. Note: at this point
+  // we must already have some devices exposed - caller must have called `await
+  // navigator.usb.requestDevice(...)` in response to user interaction before
+  // going to LibUSB. Otherwise this list will be empty.
   auto result = co_await_caught(
       CaughtPromise(val::global("navigator")["usb"].call<val>("getDevices")));
   if (result.error) {
@@ -510,11 +509,11 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
       session_id = session_id_val.as<unsigned long>();
     } else {
       // If the device doesn't have a session ID, it means we haven't seen it
-      // before. Generate a new session ID for it.
-      // We can associate an incrementing ID with the `USBDevice` object itself.
-      // It's guaranteed to be alive and, thus, stable as long as the device is
-      // connected, even between different libusb invocations.
-      // See https://github.com/WICG/webusb/issues/241.
+      // before. Generate a new session ID for it. We can associate an
+      // incrementing ID with the `USBDevice` object itself. It's guaranteed to
+      // be alive and, thus, stable as long as the device is connected, even
+      // between different libusb invocations. See
+      // https://github.com/WICG/webusb/issues/241.
       static unsigned long next_session_id = 0;
       session_id = next_session_id++;
       web_usb_device.set(SessionIdSymbol, session_id);
@@ -544,9 +543,8 @@ val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
 
 int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
   // No need to wrap into CaughtPromise as we catch all individual ops in the
-  // inner implementation and return just the error code.
-  // We do need a custom promise type to ensure conversion to int happens on
-  // the main thread though.
+  // inner implementation and return just the error code. We do need a custom
+  // promise type to ensure conversion to int happens on the main thread though.
   struct IntPromise : val {
     IntPromise(val&& promise) : val(std::move(promise)) {}
 
@@ -674,11 +672,10 @@ int em_submit_transfer(usbi_transfer* itransfer) {
     }
     // Not a coroutine because we don't want to block on this promise, just
     // schedule an asynchronous callback.
-    promiseThen(CaughtPromise(std::move(transfer_promise)),
-                [itransfer](auto&& result) {
-                  WebUsbTransferPtr(itransfer).emplace(std::move(result));
-                  usbi_signal_transfer_completion(itransfer);
-                });
+    ([itransfer, transfer_promise = std::move(transfer_promise)]() -> val {
+      WebUsbTransferPtr(itransfer).emplace(co_await_caught(CaughtPromise(std::move(transfer_promise))));
+      usbi_signal_transfer_completion(itransfer);
+    })();
     return LIBUSB_SUCCESS;
   });
 }
@@ -693,9 +690,9 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
   libusb_transfer_status status = runOnMain([itransfer]() {
     auto transfer = USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
 
-    // Take ownership of the transfer result, as `em_clear_transfer_priv`
-    // is not called automatically for completed transfers and we must
-    // free it to avoid leaks.
+    // Take ownership of the transfer result, as `em_clear_transfer_priv` is not
+    // called automatically for completed transfers and we must free it to avoid
+    // leaks.
 
     auto result = WebUsbTransferPtr(itransfer).take();
 
