@@ -464,6 +464,9 @@ struct CachedDevice {
     auto configurations_len = dev->device_descriptor.bNumConfigurations;
     configurations.reserve(configurations_len);
     for (uint8_t j = 0; j < configurations_len; j++) {
+      // Note: requesting more than (platform-specific limit) bytes here will
+      // cause the transfer to fail, see https://crbug.com/1489414.
+      // Use the most common limit of 4096 bytes for now.
       auto result =
           co_await_caught(requestDescriptor(LIBUSB_DT_CONFIG, j,
                                             /* MAX_CTRL_BUFFER_LENGTH */ 4096));
