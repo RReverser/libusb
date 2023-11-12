@@ -338,8 +338,10 @@ struct CachedDevice {
     val result = co_await cachedDevicePtr->initFromDeviceWithoutClosing(
         libusb_dev, must_close);
     if (must_close) {
-      // close shouldn't fail, so don't bother catching and handling errors.
-      co_await cachedDevicePtr->device.call<val>("close");
+      auto result = co_await_caught(cachedDevicePtr->callAsyncAndCatch("close"));
+      if (result.error) {
+        co_return result.error;
+      }
     }
     co_return std::move(result);
   }
