@@ -46,7 +46,7 @@ EM_ASYNC_JS(int, em_libusb_wait_async, (void* ptr, int timeout), {
 
 static int em_libusb_wait(void *ptr, int timeout)
 {
-	if (emscripten_is_main_browser_thread()) {
+	if (emscripten_is_main_runtime_thread()) {
 		return em_libusb_wait_async(ptr, timeout);
 	} else {
 		return emscripten_atomic_wait_u32(ptr, 0, timeout) == ATOMICS_WAIT_OK;
