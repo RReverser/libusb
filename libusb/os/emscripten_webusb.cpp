@@ -670,10 +670,11 @@ int em_submit_transfer(usbi_transfer* itransfer) {
     }
     // Not a coroutine because we don't want to block on this promise, just
     // schedule an asynchronous callback.
-    ([itransfer, transfer_promise = std::move(transfer_promise)]() -> val {
-      WebUsbTransferPtr(itransfer).emplace(co_await_caught(CaughtPromise(std::move(transfer_promise))));
-      usbi_signal_transfer_completion(itransfer);
-    })();
+    promiseThen(CaughtPromise(std::move(transfer_promise)),
+                [itransfer](auto&& result) {
+                  WebUsbTransferPtr(itransfer).emplace(std::move(result));
+                  usbi_signal_transfer_completion(itransfer);
+                });
     return LIBUSB_SUCCESS;
   });
 }
@@ -704,11 +705,11 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
 
     auto& value = result.value;
 
-    void *dataDest;
+    void* dataDest;
     unsigned char endpointDir;
 
     if (transfer->type == LIBUSB_TRANSFER_TYPE_CONTROL) {
-      dataDest = libusb_control_transfer_get_data(dataDest);
+      dataDest = libusb_control_transfer_get_data(transfer);
       endpointDir = libusb_control_transfer_get_setup(transfer)->bmRequestType;
     } else {
       dataDest = transfer->buffer;
