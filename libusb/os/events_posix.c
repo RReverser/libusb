@@ -40,18 +40,16 @@
 #include <emscripten/atomic.h>
 #include <emscripten/threading.h>
 
-static const int em_libusb_notification_atomic = 0;
-
-EM_ASYNC_JS(int, em_libusb_wait_async, (int* atomic_ptr, int timeout), {
-	return (await Atomics.waitAsync(HEAP32, atomic_ptr >> 2, 0, timeout).value) === 'ok';
+EM_ASYNC_JS(int, em_libusb_wait_async, (void* ptr, int timeout), {
+	return (await Atomics.waitAsync(HEAP32, ptr >> 2, 0, timeout).value) === 'ok';
 });
 
-static int em_libusb_wait(int timeout)
+static int em_libusb_wait(void *ptr, int timeout)
 {
 	if (emscripten_is_main_browser_thread()) {
-		return em_libusb_wait_async(&em_libusb_notification_atomic, timeout);
+		return em_libusb_wait_async(ptr, timeout);
 	} else {
-		return emscripten_atomic_wait_u32(&em_libusb_notification_atomic, 0, timeout) == ATOMICS_WAIT_OK;
+		return emscripten_atomic_wait_u32(ptr, 0, timeout) == ATOMICS_WAIT_OK;
 	}
 }
 #endif
@@ -159,7 +157,7 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
-	emscripten_atomic_notify(&em_libusb_notification_atomic, EMSCRIPTEN_NOTIFY_ALL_WAITERS);
+	emscripten_atomic_notify(event, EMSCRIPTEN_NOTIFY_ALL_WAITERS);
 #endif
 }
 
@@ -254,9 +252,6 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 
 	usbi_dbg(ctx, "poll() %u fds with timeout in %dms", (unsigned int)nfds, timeout_ms);
 #ifdef __EMSCRIPTEN__
-	/* TODO: improve event system to watch only for fd events we're interested in
-	 * (although a scenario where we have multiple watchers in parallel is very rare
-	 * in real world anyway). */
 	double until_time = emscripten_get_now() + timeout_ms;
 	for (;;) {
 		/* Emscripten `poll` ignores timeout param, but pass 0 explicitly just in case. */
@@ -264,7 +259,8 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 		if (num_ready != 0) break;
 		int timeout = until_time - emscripten_get_now();
 		if (timeout <= 0) break;
-		if (!em_libusb_wait(timeout)) break;
+		/* Wait on the same address as normally used by callers of `usbi_signal_event`. */
+		if (!em_libusb_wait(&ctx->event, timeout)) break;
 	}
 #else
 	num_ready = poll(fds, nfds, timeout_ms);
