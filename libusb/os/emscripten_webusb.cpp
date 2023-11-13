@@ -123,7 +123,7 @@ auto getUnsharedMemoryView(void* src, size_t len) {
   return val(view).call<val>("slice");
 #else
   // Non-threaded builds can avoid the copy penalty.
-  return std::move(view);
+  return view;
 #endif
 }
 
