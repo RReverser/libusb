@@ -40,16 +40,16 @@
 #include <emscripten/atomic.h>
 #include <emscripten/threading.h>
 
-EM_ASYNC_JS(int, em_libusb_wait_async, (void* ptr, int timeout), {
-	return (await Atomics.waitAsync(HEAP32, ptr >> 2, 0, timeout).value) === 'ok';
+EM_ASYNC_JS(int, em_libusb_wait_async, (const int* ptr, int expected_value, int timeout), {
+	return (await Atomics.waitAsync(HEAP32, ptr >> 2, expected_value, timeout).value) === 'ok';
 });
 
-static int em_libusb_wait(void *ptr, int timeout)
+static int em_libusb_wait(int *ptr, int expected_value, int timeout)
 {
 	if (emscripten_is_main_runtime_thread()) {
-		return em_libusb_wait_async(ptr, timeout);
+		return em_libusb_wait_async(ptr, expected_value, timeout);
 	} else {
-		return emscripten_atomic_wait_u32(ptr, 0, timeout) == ATOMICS_WAIT_OK;
+		return emscripten_atomic_wait_u32(ptr, expected_value, timeout) == ATOMICS_WAIT_OK;
 	}
 }
 #endif
@@ -157,7 +157,7 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
-	emscripten_atomic_notify(event, EMSCRIPTEN_NOTIFY_ALL_WAITERS);
+	emscripten_atomic_notify(&event->pipefd[0], EMSCRIPTEN_NOTIFY_ALL_WAITERS);
 #endif
 }
 
@@ -253,6 +253,7 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 	usbi_dbg(ctx, "poll() %u fds with timeout in %dms", (unsigned int)nfds, timeout_ms);
 #ifdef __EMSCRIPTEN__
 	double until_time = emscripten_get_now() + timeout_ms;
+	int *wait_ptr = &ctx->event.pipefd[0];
 	for (;;) {
 		/* Emscripten `poll` ignores timeout param, but pass 0 explicitly just in case. */
 		num_ready = poll(fds, nfds, 0);
@@ -260,7 +261,7 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 		int timeout = until_time - emscripten_get_now();
 		if (timeout <= 0) break;
 		/* Wait on the same address as normally used by callers of `usbi_signal_event`. */
-		if (!em_libusb_wait(&ctx->event, timeout)) break;
+		if (!em_libusb_wait(wait_ptr, *wait_ptr, timeout)) break;
 	}
 #else
 	num_ready = poll(fds, nfds, timeout_ms);
