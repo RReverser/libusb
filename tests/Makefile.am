@@ -16,7 +16,7 @@ if BUILD_UMOCKDEV_TEST
 #       would reorder the flags otherwise.
 umockdev_CPPFLAGS = ${UMOCKDEV_CFLAGS} -I$(top_srcdir)/libusb
 umockdev_LDFLAGS = -Wl,--push-state,--no-as-needed -Wl,-lumockdev-preload -Wl,--pop-state ${UMOCKDEV_LIBS}
-umockdev_SOURCES = umockdev.c
+umockdev_SOURCES = umockdev.c umockdev-server.c
 
 noinst_PROGRAMS += umockdev
 endif
