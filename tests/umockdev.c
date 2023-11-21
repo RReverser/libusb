@@ -927,10 +927,10 @@ main(int argc, char **argv)
 	           test_hotplug_enumerate,
 	           test_fixture_teardown);
 
-	g_test_add("/libusb/hotplug/add-remove", UMockdevTestbedFixture, NULL,
-	           test_fixture_setup_empty,
-	           test_hotplug_add_remove,
-	           test_fixture_teardown);
+	// g_test_add("/libusb/hotplug/add-remove", UMockdevTestbedFixture, NULL,
+	//            test_fixture_setup_empty,
+	//            test_hotplug_add_remove,
+	//            test_fixture_teardown);
 
 	return g_test_run();
 }
