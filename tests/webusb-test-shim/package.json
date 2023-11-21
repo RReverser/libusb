@@ -1,0 +1,9 @@
+{
+  "name": "webusb-test-runner",
+  "private": true,
+  "main": "index.js",
+  "author": "Ingvar Stepanyan <me@rreverser.com>",
+  "dependencies": {
+    "usb": "^2.11.0"
+  }
+}
