@@ -10,7 +10,6 @@ struct _UsbChat {
 	gboolean submit;
 	gboolean reap;
 	int reaps_offset;
-	UsbChat *next;
 
 	/* struct usbdevfs_urb */
 	unsigned char type;

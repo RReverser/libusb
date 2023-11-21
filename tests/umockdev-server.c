@@ -114,10 +114,7 @@ handle_ioctl_cb (UMockdevIoctlBase *handler, UMockdevIoctlClient *client, Mockin
 			else
 				umockdev_ioctl_client_complete(client, 0, 0);
 
-			if (fixture->chat->next)
-				fixture->chat = fixture->chat->next;
-			else
-				fixture->chat += 1;
+			fixture->chat += 1;
 			return TRUE;
 		}
 
@@ -172,10 +169,7 @@ handle_ioctl_cb (UMockdevIoctlBase *handler, UMockdevIoctlClient *client, Mockin
 
 				urb_ptr = umockdev_ioctl_data_resolve(ioctl_arg, 0, sizeof(gpointer), NULL);
 				umockdev_ioctl_data_set_ptr(urb_ptr, 0, urb_data);
-				if (fixture->chat->next)
-					fixture->chat = fixture->chat->next;
-				else
-					fixture->chat += 1;
+				fixture->chat += 1;
 				umockdev_ioctl_client_complete(client, 0, 0);
 				return TRUE;
 			}
