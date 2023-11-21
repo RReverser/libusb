@@ -12,7 +12,7 @@ if OS_EMSCRIPTEN
 # causing deadlocks when trying to use async APIs like WebUSB.
 # We use the PROXY_TO_PTHREAD Emscripten's feature to move the main app to a separate thread
 # where it can block safely.
-stress_mt_LDFLAGS = -s PROXY_TO_PTHREAD
+stress_mt_LDFLAGS = ${AM_LDFLAGS} -s PROXY_TO_PTHREAD
 endif
 
 noinst_HEADERS = libusb_testlib.h
