@@ -6,27 +6,6 @@
 
 #include "umockdev-server.h"
 
-typedef struct _UsbChat UsbChat;
-
-struct _UsbChat {
-	gboolean submit;
-	gboolean reap;
-	UsbChat *reaps;
-	UsbChat *next;
-
-	/* struct usbdevfs_urb */
-	unsigned char type;
-	unsigned char endpoint;
-	int status;
-	unsigned int flags;
-	const unsigned char *buffer;
-	int buffer_length;
-	int actual_length;
-
-	/* <submit urb> */
-	UMockdevIoctlData *submit_urb;
-};
-
 struct _MockingFixture {
 	UMockdevTestbed *testbed;
 	UMockdevIoctlBase *handler;
@@ -290,4 +269,10 @@ test_fixture_add_canon(MockingFixture * fixture)
 		  "06010100070581020002000705020200"
 		  "020007058303080009\n",
 		NULL);
+}
+
+void
+test_fixture_set_chats(MockingFixture * fixture, UsbChat * chat)
+{
+	fixture->chat = chat;
 }

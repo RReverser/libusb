@@ -52,27 +52,6 @@ log_message_free(LogMessage *msg)
 }
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(LogMessage, log_message_free)
 
-typedef struct _UsbChat UsbChat;
-
-struct _UsbChat {
-	gboolean submit;
-	gboolean reap;
-	UsbChat *reaps;
-	UsbChat *next;
-
-	/* struct usbdevfs_urb */
-	unsigned char type;
-	unsigned char endpoint;
-	int status;
-	unsigned int flags;
-	const unsigned char *buffer;
-	int buffer_length;
-	int actual_length;
-
-	/* <submit urb> */
-	void *reserved;
-};
-
 typedef struct _MockingFixture MockingFixture;
 
 typedef struct {
@@ -80,8 +59,6 @@ typedef struct {
 
 	gboolean libusb_log_silence;
 	GList *libusb_log;
-
-	UsbChat *chat;
 
 	/* GMutex confuses tsan unecessarily */
 	pthread_mutex_t mutex;
@@ -361,7 +338,7 @@ test_close_flying(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 	libusb_device_handle *handle = NULL;
 	struct libusb_transfer *transfer = NULL;
 
-	fixture->chat = chat;
+	test_fixture_set_chats(fixture->mocking, chat);
 
 	/* Open */
 	handle = libusb_open_device_with_vid_pid(fixture->ctx, 0x04a9, 0x31c0);
@@ -408,7 +385,7 @@ test_close_cancelled(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 	libusb_device_handle *handle = NULL;
 	struct libusb_transfer *transfer = NULL;
 
-	fixture->chat = chat;
+	test_fixture_set_chats(fixture->mocking, chat);
 
 	/* Open */
 	handle = libusb_open_device_with_vid_pid(fixture->ctx, 0x04a9, 0x31c0);
@@ -454,7 +431,7 @@ test_ctx_destroy(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 	libusb_device_handle *handle = NULL;
 	struct libusb_transfer *transfer = NULL;
 
-	fixture->chat = chat;
+	test_fixture_set_chats(fixture->mocking, chat);
 
 	/* Open */
 	handle = libusb_open_device_with_vid_pid(fixture->ctx, 0x04a9, 0x31c0);
@@ -536,7 +513,7 @@ test_get_string_descriptor(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 		}
 	};
 
-	fixture->chat = chat;
+	test_fixture_set_chats(fixture->mocking, chat);
 
 	handle = libusb_open_device_with_vid_pid(fixture->ctx, 0x04a9, 0x31c0);
 	g_assert_nonnull(handle);
@@ -583,7 +560,7 @@ test_timeout(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 	libusb_device_handle *handle = NULL;
 	struct libusb_transfer *transfer = NULL;
 
-	fixture->chat = chat;
+	test_fixture_set_chats(fixture->mocking, chat);
 
 	handle = libusb_open_device_with_vid_pid(fixture->ctx, 0x04a9, 0x31c0);
 	g_assert_nonnull(handle);
@@ -677,7 +654,7 @@ test_threaded_submit(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 
 	fixture->libusb_log_silence = TRUE;
 
-	c = fixture->chat = g_new0(UsbChat, G_N_ELEMENTS(data.transfers) * 2 + 1);
+	c = g_new0(UsbChat, G_N_ELEMENTS(data.transfers) * 2 + 1);
 	urb = 0;
 	for (int i = 0; i < THREADED_SUBMIT_URB_SETS; i++) {
 		for (int j = 0; j < THREADED_SUBMIT_URB_IN_FLIGHT; j++) {
@@ -700,6 +677,8 @@ test_threaded_submit(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 			urb++;
 		}
 	}
+
+	test_fixture_set_chats(fixture->mocking, c);
 
 	thread = g_thread_new("transfer all", (GThreadFunc) transfer_submit_all_retry, &data);
 
