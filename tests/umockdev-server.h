@@ -9,7 +9,7 @@ typedef struct _UsbChat UsbChat;
 struct _UsbChat {
 	gboolean submit;
 	gboolean reap;
-	UsbChat *reaps;
+	int reaps_offset;
 	UsbChat *next;
 
 	/* struct usbdevfs_urb */

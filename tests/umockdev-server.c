@@ -106,8 +106,8 @@ handle_ioctl_cb (UMockdevIoctlBase *handler, UMockdevIoctlClient *client, Mockin
 		    (fixture->chat->buffer == NULL || memcmp (fixture->chat->buffer, urb_buffer->data, buflen) == 0)) {
 			fixture->flying_urbs = g_list_append (fixture->flying_urbs, umockdev_ioctl_data_ref(urb_data));
 
-			if (fixture->chat->reaps)
-				fixture->chat->reaps->submit_urb = urb_data;
+			if (fixture->chat->reaps_offset >= 0)
+				fixture->chat[fixture->chat->reaps_offset].submit_urb = urb_data;
 
 			if (fixture->chat->status)
 				umockdev_ioctl_client_complete(client, -1, -fixture->chat->status);

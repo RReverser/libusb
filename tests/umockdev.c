@@ -473,7 +473,7 @@ test_get_string_descriptor(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 	UsbChat chat[] = {
 		{
 		  .submit = TRUE,
-		  .reaps = &chat[1],
+		  .reaps_offset = 1,
 		  .type = USBDEVFS_URB_TYPE_CONTROL,
 		  .buffer_length = 12, /* 8 byte out*/
 		  .buffer = (const unsigned char*) "\x80\x06\x00\x03\x00\x00\x04\x00",
@@ -484,7 +484,7 @@ test_get_string_descriptor(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 		  .buffer = (const unsigned char*) "\x80\x06\x00\x03\x00\x00\x04\x00\x04\x03\x09\x04",
 		}, {
 		  .submit = TRUE,
-		  .reaps = &chat[3],
+		  .reaps_offset = 1,
 		  .type = USBDEVFS_URB_TYPE_CONTROL,
 		  .buffer_length = 263, /* 8 byte out*/
 		  .buffer = (const unsigned char*) "\x80\x06\x01\x03\x09\x04\xff\x00",
@@ -495,7 +495,7 @@ test_get_string_descriptor(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 		  .buffer = (const unsigned char*) "\x80\x06\x01\x03\x09\x04\xff\x00\x06\x03\x61\x00\x62\x00",
 		}, {
 		  .submit = TRUE,
-		  .reaps = &chat[5],
+		  .reaps_offset = 1,
 		  .type = USBDEVFS_URB_TYPE_CONTROL,
 		  .buffer_length = 12, /* 8 byte out*/
 		  .buffer = (const unsigned char*) "\x80\x06\x00\x03\x00\x00\x04\x00",
@@ -659,7 +659,7 @@ test_threaded_submit(UMockdevTestbedFixture * fixture, UNUSED_DATA)
 	for (int i = 0; i < THREADED_SUBMIT_URB_SETS; i++) {
 		for (int j = 0; j < THREADED_SUBMIT_URB_IN_FLIGHT; j++) {
 			c[i*2*THREADED_SUBMIT_URB_IN_FLIGHT + j] = out_msg;
-			c[i*2*THREADED_SUBMIT_URB_IN_FLIGHT + j].reaps = &c[(i*2+1)*THREADED_SUBMIT_URB_IN_FLIGHT + j];
+			c[i*2*THREADED_SUBMIT_URB_IN_FLIGHT + j].reaps_offset = THREADED_SUBMIT_URB_IN_FLIGHT;
 			c[(i*2+1)*THREADED_SUBMIT_URB_IN_FLIGHT + j] = in_msg;
 			c[(i*2+1)*THREADED_SUBMIT_URB_IN_FLIGHT + j].buffer = (unsigned char*) g_new0(int, 1);
 			*(int*) c[(i*2+1)*THREADED_SUBMIT_URB_IN_FLIGHT + j].buffer = urb;
