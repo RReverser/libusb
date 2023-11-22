@@ -14,9 +14,15 @@ if BUILD_UMOCKDEV_TEST
 # NOTE: We add libumockdev-preload.so so that we can run tests in-process
 #       We also use -Wl,-lxxx as the compiler doesn't need it and libtool
 #       would reorder the flags otherwise.
-umockdev_CPPFLAGS = ${UMOCKDEV_CFLAGS} -I$(top_srcdir)/libusb
-umockdev_LDFLAGS = -Wl,--push-state,--no-as-needed -Wl,-lumockdev-preload -Wl,--pop-state ${UMOCKDEV_LIBS}
-umockdev_SOURCES = umockdev.c umockdev-server.c
+libumockdev_server_la_CPPFLAGS = ${AM_CPPFLAGS} ${UMOCKDEV_CFLAGS}
+libumockdev_server_la_LIBADD = -lumockdev-preload ${UMOCKDEV_LIBS}
+libumockdev_server_la_SOURCES = umockdev-server.c
+
+noinst_LTLIBRARIES = libumockdev_server.la
+
+umockdev_SOURCES = umockdev.cpp testlib.c
+umockdev_CXXFLAGS = -std=c++17
+umockdev_LDADD = ${LDADD} libumockdev_server.la
 
 noinst_PROGRAMS += umockdev
 endif

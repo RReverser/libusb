@@ -22,6 +22,10 @@
 
 #include <config.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Values returned from a test function to indicate test result */
 typedef enum {
 	/** Indicates that the test ran successfully. */
@@ -72,5 +76,9 @@ typedef struct {
  */
 int libusb_testlib_run_tests(int argc, char *argv[],
 	const libusb_testlib_test *tests);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif //LIBUSB_TESTLIB_H

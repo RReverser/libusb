@@ -267,6 +267,11 @@ test_fixture_add_canon(MockingFixture * fixture)
 		NULL);
 }
 
+void test_fixture_remove_canon(MockingFixture * fixture)
+{
+	umockdev_testbed_uevent(fixture->testbed, "/sys/devices/usb1", "remove");
+}
+
 void
 test_fixture_set_chats(MockingFixture * fixture, UsbChat * chat)
 {
