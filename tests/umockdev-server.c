@@ -230,6 +230,8 @@ test_fixture_teardown_mocking(MockingFixture * fixture)
 		umockdev_ioctl_data_unref (fixture->flying_urbs->data);
 		fixture->flying_urbs = g_list_delete_link (fixture->flying_urbs, fixture->flying_urbs);
 	}
+
+	g_free(fixture);
 }
 
 void
