@@ -696,6 +696,12 @@ public:
 		assert(handle);
 
 		std::vector<UsbChat> c(std::size(data.transfers) * 2 + 1);
+
+		std::vector<int> urbs(std::size(data.transfers) * 2);
+		for (int i = 0; i < std::size(urbs); i++) {
+			urbs[i] = i;
+		}
+
 		urb = 0;
 		for (int i = 0; i < THREADED_SUBMIT_URB_SETS; i++) {
 			for (int j = 0; j < THREADED_SUBMIT_URB_IN_FLIGHT; j++) {
@@ -704,7 +710,7 @@ public:
 					THREADED_SUBMIT_URB_IN_FLIGHT;
 				c[(i * 2 + 1) * THREADED_SUBMIT_URB_IN_FLIGHT + j] = in_msg;
 				c[(i * 2 + 1) * THREADED_SUBMIT_URB_IN_FLIGHT + j].buffer =
-					(const unsigned char*)new int(urb);
+					(const unsigned char*)&urbs[urb];
 
 				data.transfers[urb] = libusb_alloc_transfer(0);
 				libusb_fill_bulk_transfer(
@@ -729,13 +735,6 @@ public:
 
 		libusb_log_silence = false;
 		libusb_close(handle);
-
-		for (int i = 0; i < THREADED_SUBMIT_URB_SETS; i++) {
-			for (int j = 0; j < THREADED_SUBMIT_URB_IN_FLIGHT; j++) {
-				delete (int*)c[(i * 2 + 1) * THREADED_SUBMIT_URB_IN_FLIGHT + j]
-					.buffer;
-			}
-		}
 	}
 
 	void test_hotplug_enumerate() {
