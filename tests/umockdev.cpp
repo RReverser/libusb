@@ -278,6 +278,9 @@ class UMockdevTestbedFixture {
 		(void)ctx;
 		(void)device;
 
+		printf("hotplug_count_arrival_cb %p %d:%d\n", user_data,
+			   libusb_get_port_number(device), libusb_get_bus_number(device));
+
 		*(int*)user_data += 1;
 
 		return 0;
@@ -292,6 +295,9 @@ class UMockdevTestbedFixture {
 
 		(void)ctx;
 		(void)device;
+
+		printf("hotplug_count_removal_cb %p %d:%d\n", user_data,
+			   libusb_get_port_number(device), libusb_get_bus_number(device));
 
 		*(int*)user_data += 1;
 
@@ -757,7 +763,15 @@ public:
 	}
 
 	void test_hotplug_enumerate() {
+		printf("Adding device\n");
+
 		mocking.add_canon();
+
+		libusb_device** devs = NULL;
+		assert_int_eq(libusb_get_device_list(ctx, &devs), 1);
+		libusb_free_device_list(devs, true);
+
+		printf("Listed device\n");
 
 		libusb_hotplug_callback_handle handle_enumerate;
 		libusb_hotplug_callback_handle handle_no_enumerate;
@@ -765,6 +779,8 @@ public:
 		int event_count_no_enumerate = 0;
 		struct timeval zero_tv = {0};
 		int r;
+
+		printf("Registering callback 1\n");
 
 		r = libusb_hotplug_register_callback(
 			ctx,
@@ -775,6 +791,8 @@ public:
 			hotplug_count_arrival_cb, &event_count_enumerate,
 			&handle_enumerate);
 		assert_int_eq(r, 0);
+
+		printf("Registering callback 2\n");
 
 		r = libusb_hotplug_register_callback(
 			ctx,
@@ -787,6 +805,8 @@ public:
 
 		assert_int_eq(event_count_enumerate, 1);
 		assert_int_eq(event_count_no_enumerate, 0);
+
+		printf("Handling events\n");
 
 		libusb_handle_events_timeout(ctx, &zero_tv);
 
