@@ -278,9 +278,6 @@ class UMockdevTestbedFixture {
 		(void)ctx;
 		(void)device;
 
-		printf("hotplug_count_arrival_cb %p %d:%d\n", user_data,
-			   libusb_get_port_number(device), libusb_get_bus_number(device));
-
 		*(int*)user_data += 1;
 
 		return 0;
@@ -295,9 +292,6 @@ class UMockdevTestbedFixture {
 
 		(void)ctx;
 		(void)device;
-
-		printf("hotplug_count_removal_cb %p %d:%d\n", user_data,
-			   libusb_get_port_number(device), libusb_get_bus_number(device));
 
 		*(int*)user_data += 1;
 
@@ -345,9 +339,8 @@ public:
 		assert(libusb_log.empty());
 	}
 
-	static libusb_testlib_result run_test(
-		bool with_canon,
-		void (UMockdevTestbedFixture::*test_method)()) {
+	template <bool with_canon, void (UMockdevTestbedFixture::*test_method)()>
+	static libusb_testlib_result run_test() {
 		libusb_testlib_result result = TEST_STATUS_SUCCESS;
 		try {
 			UMockdevTestbedFixture fixture(with_canon);
@@ -872,12 +865,11 @@ public:
 	}
 };
 
-#define WRAP_TEST(WITH_CANON, METHOD)                         \
-	{                                                         \
-		#METHOD, []() {                                       \
-			return UMockdevTestbedFixture::run_test(          \
-				WITH_CANON, &UMockdevTestbedFixture::METHOD); \
-		}                                                     \
+#define WRAP_TEST(WITH_CANON, METHOD)                                         \
+	{                                                                         \
+		#METHOD,                                                              \
+			UMockdevTestbedFixture::run_test<WITH_CANON,                      \
+											 &UMockdevTestbedFixture::METHOD> \
 	}
 
 static constexpr libusb_testlib_test tests[] = {
