@@ -13,9 +13,9 @@ struct _UsbChat {
 	unsigned char endpoint;
 	int status;
 	unsigned int flags;
-	int actual_length;
 	const unsigned char *buffer;
 	int buffer_length;
+	int actual_length;
 
 	/* <submit urb> */
 	struct _UMockdevIoctlData *reap_submit_urb;
