@@ -44,12 +44,12 @@
 #pragma GCC diagnostic ignored "-Wanalyzer-file-leak"
 #endif
 
-typedef struct {
+struct LogMessage {
 	std::thread::id thread;
 	libusb_context* ctx;
 	enum libusb_log_level level;
 	std::string str;
-} LogMessage;
+};
 
 template <typename... Args>
 std::string string_format(const char* format, Args... args) {
@@ -98,7 +98,7 @@ public:
 class UMockdevTestbedFixture {
 	Mocking mocking;
 
-	struct libusb_context* ctx;
+	libusb_context* ctx;
 
 	bool libusb_log_silence = false;
 	std::deque<LogMessage> libusb_log;
@@ -226,7 +226,7 @@ class UMockdevTestbedFixture {
 		return ctx;
 	}
 
-	static void transfer_cb_inc_user_data(struct libusb_transfer* transfer) {
+	static void transfer_cb_inc_user_data(libusb_transfer* transfer) {
 		*(int*)transfer->user_data += 1;
 	}
 
@@ -234,7 +234,7 @@ class UMockdevTestbedFixture {
 	static constexpr size_t THREADED_SUBMIT_URB_IN_FLIGHT = 64;
 
 	struct TestThreadedSubmit {
-		struct libusb_transfer*
+		libusb_transfer*
 			transfers[THREADED_SUBMIT_URB_IN_FLIGHT * THREADED_SUBMIT_URB_SETS];
 		int submitted;
 		int completed;
@@ -254,8 +254,7 @@ class UMockdevTestbedFixture {
 		}
 	}
 
-	static void test_threaded_submit_transfer_cb(
-		struct libusb_transfer* transfer) {
+	static void test_threaded_submit_transfer_cb(libusb_transfer* transfer) {
 		TestThreadedSubmit* data = (TestThreadedSubmit*)transfer->user_data;
 
 		/* We should only be receiving packets in the main thread */
@@ -357,7 +356,7 @@ public:
 
 	void test_open_close() {
 		libusb_device** devs = NULL;
-		struct libusb_device_descriptor desc;
+		libusb_device_descriptor desc;
 		libusb_device_handle* handle = NULL;
 
 		assert_int_eq(libusb_get_device_list(ctx, &devs), 1);
@@ -427,7 +426,7 @@ public:
 			},
 			{.submit = false}};
 		libusb_device_handle* handle = NULL;
-		struct libusb_transfer* transfer = NULL;
+		libusb_transfer* transfer = NULL;
 
 		mocking.set_chats(chat);
 
@@ -471,7 +470,7 @@ public:
 			},
 			{.submit = false}};
 		libusb_device_handle* handle = NULL;
-		struct libusb_transfer* transfer = NULL;
+		libusb_transfer* transfer = NULL;
 
 		mocking.set_chats(chat);
 
@@ -513,7 +512,7 @@ public:
 			},
 			{.submit = false}};
 		libusb_device_handle* handle = NULL;
-		struct libusb_transfer* transfer = NULL;
+		libusb_transfer* transfer = NULL;
 
 		mocking.set_chats(chat);
 
@@ -649,7 +648,7 @@ public:
 			}};
 		int completed = 0;
 		libusb_device_handle* handle = NULL;
-		struct libusb_transfer* transfer = NULL;
+		libusb_transfer* transfer = NULL;
 
 		mocking.set_chats(chat);
 
