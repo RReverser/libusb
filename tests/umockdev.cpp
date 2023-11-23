@@ -100,7 +100,7 @@ class UMockdevTestbedFixture {
 
 	struct libusb_context* ctx;
 
-	bool libusb_log_silence;
+	bool libusb_log_silence = false;
 	std::deque<LogMessage> libusb_log;
 
 	std::mutex mutex;
@@ -307,10 +307,12 @@ class UMockdevTestbedFixture {
 
 public:
 
-	UMockdevTestbedFixture()
-		: mocking(),
-		  ctx(test_fixture_setup_libusb(0)),
-		  libusb_log_silence(false) {}
+	UMockdevTestbedFixture(bool with_canon) {
+		if (with_canon) {
+			mocking.add_canon();
+		}
+		ctx = test_fixture_setup_libusb(with_canon ? 1 : 0);
+	}
 
 	// Make sure it's immovable because we store its address in `cur_fixture`.
 	UMockdevTestbedFixture(UMockdevTestbedFixture&&) = delete;
@@ -344,10 +346,11 @@ public:
 	}
 
 	static libusb_testlib_result run_test(
+		bool with_canon,
 		void (UMockdevTestbedFixture::*test_method)()) {
 		libusb_testlib_result result = TEST_STATUS_SUCCESS;
 		try {
-			UMockdevTestbedFixture fixture;
+			UMockdevTestbedFixture fixture(with_canon);
 			assert(!cur_fixture);
 			cur_fixture = &fixture;
 			(fixture.*test_method)();
@@ -360,8 +363,6 @@ public:
 	}
 
 	void test_open_close() {
-		mocking.add_canon();
-
 		libusb_device** devs = NULL;
 		struct libusb_device_descriptor desc;
 		libusb_device_handle* handle = NULL;
@@ -398,8 +399,6 @@ public:
 	}
 
 	void test_implicit_default() {
-		mocking.add_canon();
-
 		libusb_device** devs = NULL;
 
 		clear_libusb_log(LIBUSB_LOG_LEVEL_INFO);
@@ -425,8 +424,6 @@ public:
 	}
 
 	void test_close_flying() {
-		mocking.add_canon();
-
 		UsbChat chat[] = {
 			{
 				.submit = true,
@@ -471,8 +468,6 @@ public:
 	}
 
 	void test_close_cancelled() {
-		mocking.add_canon();
-
 		UsbChat chat[] = {
 			{
 				.submit = true,
@@ -515,8 +510,6 @@ public:
 	}
 
 	void test_ctx_destroy() {
-		mocking.add_canon();
-
 		UsbChat chat[] = {
 			{
 				.submit = true,
@@ -563,8 +556,6 @@ public:
 	}
 
 	void test_get_string_descriptor() {
-		mocking.add_canon();
-
 		unsigned char data[255] = {
 			0,
 		};
@@ -655,8 +646,6 @@ public:
 	}
 
 	void test_timeout() {
-		mocking.add_canon();
-
 		UsbChat chat[] = {
 			{
 				.submit = true,
@@ -698,8 +687,6 @@ public:
 	}
 
 	void test_threaded_submit() {
-		mocking.add_canon();
-
 		libusb_log_silence = true;
 
 		TestThreadedSubmit data = {.fixture = this};
@@ -763,16 +750,6 @@ public:
 	}
 
 	void test_hotplug_enumerate() {
-		printf("Adding device\n");
-
-		mocking.add_canon();
-
-		libusb_device** devs = NULL;
-		assert_int_eq(libusb_get_device_list(ctx, &devs), 1);
-		libusb_free_device_list(devs, true);
-
-		printf("Listed device\n");
-
 		libusb_hotplug_callback_handle handle_enumerate;
 		libusb_hotplug_callback_handle handle_no_enumerate;
 		int event_count_enumerate = 0;
@@ -895,28 +872,28 @@ public:
 	}
 };
 
-#define WRAP_TEST(METHOD)                            \
-	{                                                \
-		#METHOD, []() {                              \
-			return UMockdevTestbedFixture::run_test( \
-				&UMockdevTestbedFixture::METHOD);    \
-		}                                            \
+#define WRAP_TEST(WITH_CANON, METHOD)                         \
+	{                                                         \
+		#METHOD, []() {                                       \
+			return UMockdevTestbedFixture::run_test(          \
+				WITH_CANON, &UMockdevTestbedFixture::METHOD); \
+		}                                                     \
 	}
 
 static constexpr libusb_testlib_test tests[] = {
-	WRAP_TEST(test_open_close),
-	WRAP_TEST(test_implicit_default),
+	WRAP_TEST(true, test_open_close),
+	WRAP_TEST(true, test_implicit_default),
 
-	WRAP_TEST(test_close_flying),
-	WRAP_TEST(test_close_cancelled),
+	WRAP_TEST(true, test_close_flying),
+	WRAP_TEST(true, test_close_cancelled),
 
-	WRAP_TEST(test_ctx_destroy),
-	WRAP_TEST(test_get_string_descriptor),
-	WRAP_TEST(test_timeout),
-	WRAP_TEST(test_threaded_submit),
-	WRAP_TEST(test_hotplug_enumerate),
+	WRAP_TEST(true, test_ctx_destroy),
+	WRAP_TEST(true, test_get_string_descriptor),
+	WRAP_TEST(true, test_timeout),
+	WRAP_TEST(true, test_threaded_submit),
+	WRAP_TEST(true, test_hotplug_enumerate),
 
-	WRAP_TEST(test_hotplug_add_remove),
+	WRAP_TEST(false, test_hotplug_add_remove),
 
 	LIBUSB_NULL_TEST};
 
