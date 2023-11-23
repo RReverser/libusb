@@ -108,8 +108,7 @@ handle_ioctl_cb (UMockdevIoctlBase *handler, UMockdevIoctlClient *client, Mockin
 
 			if (fixture->chat->reaps_offset >= 0) {
 				UsbChat *reaped = &fixture->chat[fixture->chat->reaps_offset];
-				reaped->reap = true;
-				reaped->submit_urb = urb_data;
+				reaped->reap_submit_urb = urb_data;
 			}
 
 			if (fixture->chat->status)
@@ -155,13 +154,13 @@ handle_ioctl_cb (UMockdevIoctlBase *handler, UMockdevIoctlClient *client, Mockin
 			return TRUE;
 		}
 
-		if (fixture->chat && fixture->chat->reap) {
-			GList *l = g_list_find(fixture->flying_urbs, fixture->chat->submit_urb);
+		if (fixture->chat && fixture->chat->reap_submit_urb) {
+			GList *l = g_list_find(fixture->flying_urbs, fixture->chat->reap_submit_urb);
 
 			if (l) {
 				fixture->flying_urbs = g_list_remove_link(fixture->flying_urbs, fixture->flying_urbs);
 
-				urb_data = fixture->chat->submit_urb;
+				urb_data = fixture->chat->reap_submit_urb;
 				urb = (struct usbdevfs_urb*) urb_data->data;
 				urb->actual_length = fixture->chat->actual_length;
 				if (urb->type == USBDEVFS_URB_TYPE_CONTROL && urb->actual_length)

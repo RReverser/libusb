@@ -18,8 +18,7 @@ struct _UsbChat {
 	int buffer_length;
 
 	/* <submit urb> */
-	bool reap;
-	struct _UMockdevIoctlData *submit_urb;
+	struct _UMockdevIoctlData *reap_submit_urb;
 };
 
 #ifdef __cplusplus
