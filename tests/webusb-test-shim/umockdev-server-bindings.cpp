@@ -1,6 +1,4 @@
-extern "C" {
-#include <umockdev-server.h>
-}
+#include "../umockdev-server.h"
 
 #include <napi.h>
 
