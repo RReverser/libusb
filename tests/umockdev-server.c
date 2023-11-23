@@ -16,9 +16,6 @@ struct _MockingFixture {
 	UsbChat *chat;
 	GList *flying_urbs;
 	GList *discarded_urbs;
-
-	/* GMutex confuses tsan unecessarily */
-	pthread_mutex_t mutex;
 };
 
 static gint
