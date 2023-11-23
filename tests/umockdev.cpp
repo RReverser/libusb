@@ -96,14 +96,14 @@ public:
 };
 
 class UMockdevTestbedFixture {
+	Mocking mocking;
+
 	struct libusb_context* ctx;
 
 	bool libusb_log_silence;
 	std::deque<LogMessage> libusb_log;
 
 	std::mutex mutex;
-
-	Mocking mocking;
 
 	/* Global for log handler */
 	inline static UMockdevTestbedFixture* cur_fixture;
@@ -207,9 +207,10 @@ class UMockdevTestbedFixture {
 		}
 	}
 
-	void test_fixture_setup_libusb(ssize_t devcount) {
+	static libusb_context* test_fixture_setup_libusb(ssize_t devcount) {
 		libusb_device** devs = NULL;
 
+		libusb_context* ctx = NULL;
 		libusb_init_context(/*ctx=*/&ctx, /*options=*/NULL, /*num_options=*/0);
 
 		/* Supress global log messages completely
@@ -221,6 +222,8 @@ class UMockdevTestbedFixture {
 		assert_int_eq(libusb_get_device_list(ctx, &devs), devcount);
 		libusb_free_device_list(devs, true);
 		libusb_set_log_cb(ctx, log_handler, LIBUSB_LOG_CB_CONTEXT);
+
+		return ctx;
 	}
 
 	static void transfer_cb_inc_user_data(struct libusb_transfer* transfer) {
@@ -298,7 +301,10 @@ class UMockdevTestbedFixture {
 
 public:
 
-	UMockdevTestbedFixture() { test_fixture_setup_libusb(0); }
+	UMockdevTestbedFixture()
+		: mocking(),
+		  ctx(test_fixture_setup_libusb(0)),
+		  libusb_log_silence(false) {}
 
 	// Make sure it's immovable because we store its address in `cur_fixture`.
 	UMockdevTestbedFixture(UMockdevTestbedFixture&&) = delete;
