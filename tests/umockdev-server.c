@@ -272,7 +272,7 @@ void test_fixture_remove_canon(MockingFixture * fixture)
 }
 
 void
-test_fixture_set_chats(MockingFixture * fixture, UsbChat * chat)
+test_fixture_set_chats(MockingFixture * fixture, UsbChat * chat, size_t n_chats)
 {
 	fixture->chat = chat;
 }

@@ -24,9 +24,8 @@ Napi::Value AddCanon(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value SetChats(const Napi::CallbackInfo& info) {
-	auto chats =
-		reinterpret_cast<UsbChat*>(info[1].As<Napi::Uint8Array>().Data());
-	test_fixture_set_chats(GetFixtureArg(info), chats);
+	auto chats_raw = info[1].As<Napi::Uint8Array>();
+	test_fixture_set_chats(GetFixtureArg(info), reinterpret_cast<UsbChat*>(chats_raw.Data()), chats_raw.ByteLength() / sizeof(UsbChat));
 	return {};
 }
 

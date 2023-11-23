@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef struct MockingFixture MockingFixture;
 
@@ -27,7 +28,7 @@ MockingFixture* test_fixture_setup_mocking(void);
 void test_fixture_add_canon(MockingFixture * fixture);
 void test_fixture_remove_canon(MockingFixture * fixture);
 void test_fixture_teardown_mocking(MockingFixture * fixture);
-void test_fixture_set_chats(MockingFixture * fixture, UsbChat * chat);
+void test_fixture_set_chats(MockingFixture * fixture, UsbChat * chat, size_t nchats);
 
 #ifdef __cplusplus
 }

@@ -92,7 +92,14 @@ public:
 
 	void remove_canon() { test_fixture_remove_canon(fixture); }
 
-	void set_chats(UsbChat chats[]) { test_fixture_set_chats(fixture, chats); }
+	void set_chats(UsbChat* chat, size_t nchats) {
+		test_fixture_set_chats(fixture, chat, nchats);
+	}
+
+	template <size_t N>
+	void set_chats(UsbChat (&chats)[N]) {
+		set_chats(&chats, N);
+	}
 };
 
 class UMockdevTestbedFixture {
@@ -723,7 +730,7 @@ public:
 			}
 		}
 
-		mocking.set_chats(c.data());
+		mocking.set_chats(c.data(), c.size());
 
 		std::thread thread(transfer_submit_all_retry, &data);
 
