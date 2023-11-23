@@ -1,10 +1,8 @@
 #include <stdbool.h>
 
-typedef struct _MockingFixture MockingFixture;
+typedef struct MockingFixture MockingFixture;
 
-typedef struct _UsbChat UsbChat;
-
-struct _UsbChat {
+typedef struct UsbChat {
 	bool submit;
 	int reaps_offset;
 
@@ -19,7 +17,7 @@ struct _UsbChat {
 
 	/* <submit urb> */
 	struct _UMockdevIoctlData *reap_submit_urb;
-};
+} UsbChat;
 
 #ifdef __cplusplus
 extern "C" {

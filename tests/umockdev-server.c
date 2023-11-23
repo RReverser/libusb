@@ -6,7 +6,7 @@
 
 #include "umockdev-server.h"
 
-struct _MockingFixture {
+struct MockingFixture {
 	UMockdevTestbed *testbed;
 	UMockdevIoctlBase *handler;
 
