@@ -442,9 +442,10 @@ public:
 		assert(handle);
 
 		transfer = libusb_alloc_transfer(0);
-		libusb_fill_bulk_transfer(transfer, handle, LIBUSB_ENDPOINT_OUT,
-								  (unsigned char*)chat[0].buffer,
-								  chat[0].buffer_length, NULL, NULL, 1);
+		// Note: don't reuse `chat[0].buffer` because it might be modified.
+		libusb_fill_bulk_transfer(
+			transfer, handle, LIBUSB_ENDPOINT_OUT,
+			(unsigned char[]){0x01, 0x02, 0x03, 0x04}, 4, NULL, NULL, 1);
 
 		/* Submit */
 		libusb_submit_transfer(transfer);

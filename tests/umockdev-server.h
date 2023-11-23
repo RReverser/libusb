@@ -12,12 +12,18 @@ typedef struct UsbChat {
 	unsigned char endpoint;
 	int status;
 	unsigned int flags;
-	const unsigned char *buffer;
+	union {
+		const unsigned char *buffer;
+		unsigned long long buffer_ptr;
+	};
 	int buffer_length;
 	int actual_length;
 
 	/* <submit urb> */
-	struct _UMockdevIoctlData *reap_submit_urb;
+	union {
+		struct _UMockdevIoctlData *reap_submit_urb;
+		unsigned long long reap_submit_urb_ptr;
+	};
 } UsbChat;
 
 #ifdef __cplusplus

@@ -24,16 +24,31 @@ Napi::Value AddCanon(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value SetChats(const Napi::CallbackInfo& info) {
-	auto chats_raw = info[1].As<Napi::Uint8Array>();
-	test_fixture_set_chats(GetFixtureArg(info), reinterpret_cast<UsbChat*>(chats_raw.Data()), chats_raw.ByteLength() / sizeof(UsbChat));
+	auto wasm_mem_start = info.Env()
+							  .Global()
+							  .Get("wasmMemory")
+							  .ToObject()
+							  .Get("buffer")
+							  .As<Napi::ArrayBuffer>()
+							  .Data();
+	auto chats_data =
+		reinterpret_cast<UsbChat*>(wasm_mem_start + chats_raw.Data());
+	auto chats_len = chats_raw.ByteLength() / sizeof(UsbChat);
+	// Adjust pointers from Wasm to native.
+	for (size_t i = 0; i < chats_len; i++) {
+		chats_data[i].buffer = wasm_mem_start + chats_data[i].buffer_ptr;
+	}
+	test_fixture_set_chats(GetFixtureArg(info), chats_data, chats_len);
 	return {};
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
-	exports.Set("setupMocking", Napi::Function::New(env, SetupMocking));
-	exports.Set("teardownMocking", Napi::Function::New(env, TeardownMocking));
-	exports.Set("addCanon", Napi::Function::New(env, AddCanon));
-	exports.Set("setChats", Napi::Function::New(env, SetChats));
+	exports.Set("test_fixture_setup_mocking",
+				Napi::Function::New(env, SetupMocking));
+	exports.Set("test_fixture_teardown_mocking",
+				Napi::Function::New(env, TeardownMocking));
+	exports.Set("test_fixture_add_canon", Napi::Function::New(env, AddCanon));
+	exports.Set("test_fixture_set_chats", Napi::Function::New(env, SetChats));
 	return exports;
 }
 
