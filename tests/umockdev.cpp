@@ -564,7 +564,6 @@ public:
 			},
 			{
 				/* String with content 0x0409 (en_US) */
-				.reap = true,
 				.actual_length = 12,
 				.buffer = (const unsigned char*)"\x80\x06\x00\x03\x00\x00\x04"
 												"\x00\x04\x03\x09\x04",
@@ -579,7 +578,6 @@ public:
 			},
 			{
 				/* 4 byte string, "ab" */
-				.reap = true,
 				.actual_length = 14,
 				.buffer = (const unsigned char*)"\x80\x06\x01\x03\x09\x04\xff"
 												"\x00\x06\x03\x61\x00\x62\x00",
@@ -593,7 +591,6 @@ public:
 				.buffer_length = 12, /* 8 byte out*/
 			},
 			{
-				.reap = true,
 				.status = -ENOENT,
 			},
 			{
@@ -690,7 +687,7 @@ public:
 			.buffer_length = sizeof(int),
 		};
 		UsbChat in_msg = {
-			.reap = true,
+			// .reap = true,
 			.actual_length = 4,
 		};
 		libusb_device_handle* handle = NULL;

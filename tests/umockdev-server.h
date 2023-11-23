@@ -6,7 +6,6 @@ typedef struct _UsbChat UsbChat;
 
 struct _UsbChat {
 	bool submit;
-	bool reap;
 	int reaps_offset;
 
 	/* struct usbdevfs_urb */
@@ -19,6 +18,7 @@ struct _UsbChat {
 	int buffer_length;
 
 	/* <submit urb> */
+	bool reap;
 	struct _UMockdevIoctlData *submit_urb;
 };
 
