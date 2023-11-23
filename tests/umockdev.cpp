@@ -687,7 +687,6 @@ public:
 			.buffer_length = sizeof(int),
 		};
 		UsbChat in_msg = {
-			// .reap = true,
 			.actual_length = 4,
 		};
 		libusb_device_handle* handle = NULL;
