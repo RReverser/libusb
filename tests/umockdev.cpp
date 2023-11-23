@@ -564,9 +564,9 @@ public:
 			},
 			{
 				/* String with content 0x0409 (en_US) */
-				.actual_length = 12,
 				.buffer = (const unsigned char*)"\x80\x06\x00\x03\x00\x00\x04"
 												"\x00\x04\x03\x09\x04",
+				.actual_length = 12,
 			},
 			{
 				.submit = true,
@@ -578,9 +578,9 @@ public:
 			},
 			{
 				/* 4 byte string, "ab" */
-				.actual_length = 14,
 				.buffer = (const unsigned char*)"\x80\x06\x01\x03\x09\x04\xff"
 												"\x00\x06\x03\x61\x00\x62\x00",
+				.actual_length = 14,
 			},
 			{
 				.submit = true,
