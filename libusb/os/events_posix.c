@@ -49,11 +49,11 @@ EM_ASYNC_JS(int, em_libusb_wait_async, (const int* ptr, int expected_value, int 
 
 static int em_libusb_wait(int *ptr, int expected_value, int timeout)
 {
-	// if (emscripten_is_main_runtime_thread()) {
+	if (emscripten_is_main_runtime_thread()) {
 		return em_libusb_wait_async(ptr, expected_value, timeout);
-	// } else {
-	// 	return emscripten_atomic_wait_u32(ptr, expected_value, 1000000LL * timeout) == ATOMICS_WAIT_OK;
-	// }
+	} else {
+		return emscripten_atomic_wait_u32(ptr, expected_value, 1000000LL * timeout) == ATOMICS_WAIT_OK;
+	}
 }
 #endif
 #include <unistd.h>
