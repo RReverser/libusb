@@ -41,16 +41,16 @@
 #include <emscripten/threading.h>
 #include <stdio.h>
 
-EM_ASYNC_JS(void, em_libusb_wait_async, (const int* ptr, int expected_value, int timeout), {
+EM_ASYNC_JS(void, em_libusb_wait_async, (const _Atomic int* ptr, int expected_value, int timeout), {
 	await Atomics.waitAsync(HEAP32, ptr >> 2, expected_value, timeout).value;
 });
 
-static void em_libusb_wait(int *ptr, int expected_value, int timeout)
+static void em_libusb_wait(const _Atomic int *ptr, int expected_value, int timeout)
 {
 	if (emscripten_is_main_runtime_thread()) {
 		em_libusb_wait_async(ptr, expected_value, timeout);
 	} else {
-		emscripten_atomic_wait_u32(ptr, expected_value, 1000000LL * timeout);
+		emscripten_atomic_wait_u32((int*)ptr, expected_value, 1000000LL * timeout);
 	}
 }
 #endif
