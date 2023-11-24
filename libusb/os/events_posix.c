@@ -160,7 +160,8 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
-	emscripten_atomic_notify(&event->pipefd[0], EMSCRIPTEN_NOTIFY_ALL_WAITERS);
+	event->has_events = 1;
+	emscripten_atomic_notify(&event->has_events, EMSCRIPTEN_NOTIFY_ALL_WAITERS);
 #endif
 }
 
@@ -172,6 +173,7 @@ void usbi_clear_event(usbi_event_t *event)
 	r = read(EVENT_READ_FD(event), &dummy, sizeof(dummy));
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event read failed");
+	event->has_events = 0;
 }
 
 #ifdef HAVE_TIMERFD
@@ -255,21 +257,9 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 
 	usbi_dbg(ctx, "poll() %u fds with timeout in %dms", (unsigned int)nfds, timeout_ms);
 #ifdef __EMSCRIPTEN__
-	double until_time = emscripten_get_now() + timeout_ms;
-	int *wait_ptr = &ctx->event.pipefd[0];
-	for (;;) {
-		/* Emscripten `poll` ignores timeout param, but pass 0 explicitly just in case. */
-		num_ready = poll(fds, nfds, 0);
-		if (num_ready != 0) break;
-		int timeout = until_time - emscripten_get_now();
-		if (timeout <= 0) break;
-		/* Wait on the same address as normally used by callers of `usbi_signal_event`. */
-		printf("em_libusb_wait %p with timeout %d\n", wait_ptr, timeout);
-		if (!em_libusb_wait(wait_ptr, *wait_ptr, timeout)) break;
-	}
-#else
-	num_ready = poll(fds, nfds, timeout_ms);
+	em_libusb_wait(&ctx->event.has_events, 0, timeout_ms);
 #endif
+	num_ready = poll(fds, nfds, timeout_ms);
 	usbi_dbg(ctx, "poll() returned %d", num_ready);
 	if (num_ready == 0) {
 		if (usbi_using_timer(ctx))
