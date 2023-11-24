@@ -160,8 +160,8 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
-	event->has_events = 1;
-	emscripten_atomic_notify(&event->has_events, EMSCRIPTEN_NOTIFY_ALL_WAITERS);
+	event->has_event = 1;
+	emscripten_atomic_notify(&event->has_event, EMSCRIPTEN_NOTIFY_ALL_WAITERS);
 #endif
 }
 
@@ -173,7 +173,7 @@ void usbi_clear_event(usbi_event_t *event)
 	r = read(EVENT_READ_FD(event), &dummy, sizeof(dummy));
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event read failed");
-	event->has_events = 0;
+	event->has_event = 0;
 }
 
 #ifdef HAVE_TIMERFD
@@ -257,7 +257,7 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 
 	usbi_dbg(ctx, "poll() %u fds with timeout in %dms", (unsigned int)nfds, timeout_ms);
 #ifdef __EMSCRIPTEN__
-	em_libusb_wait(&ctx->event.has_events, 0, timeout_ms);
+	em_libusb_wait(&ctx->event.has_event, 0, timeout_ms);
 #endif
 	num_ready = poll(fds, nfds, timeout_ms);
 	usbi_dbg(ctx, "poll() returned %d", num_ready);
