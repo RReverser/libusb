@@ -50,12 +50,16 @@ static ProxyingQueue queue;
 #pragma clang diagnostic ignored "-Wshadow"
 
 namespace {
+
 // clang-format off
-	EM_JS(EM_VAL, em_promise_catch_impl, (EM_VAL handle), {
-		let promise = Emval.toValue(handle);
-		promise = promise.then(
-			value => ({error : 0, value}),
-			error => {
+EM_JS(EM_VAL, em_promise_catch_impl, (EM_VAL handle), {
+	let promise = Emval.toValue(handle);
+	promise = promise.then(
+		value => ({error : 0, value}),
+		error => {
+			console.error(error);
+			let errorCode = -99; // LIBUSB_ERROR_OTHER
+			if (error instanceof DOMException) {
 				const ERROR_CODES = {
 					// LIBUSB_ERROR_IO
 					NetworkError : -1,
@@ -76,25 +80,21 @@ namespace {
 					// LIBUSB_ERROR_NOT_SUPPORTED
 					NotSupportedError : -12,
 				};
-				console.error(error);
-				let errorCode = -99; // LIBUSB_ERROR_OTHER
-				if (error instanceof DOMException) {
-					errorCode = ERROR_CODES[error.name] ?? errorCode;
-				}
-				else if ((error instanceof RangeError) || (error instanceof TypeError)) {
-					errorCode = -2; // LIBUSB_ERROR_INVALID_PARAM
-				}
-				return {error: errorCode, value: undefined};
+				errorCode = ERROR_CODES[error.name] ?? errorCode;
+			} else if (error instanceof RangeError || error instanceof TypeError) {
+				errorCode = -2; // LIBUSB_ERROR_INVALID_PARAM
 			}
-		);
-		return Emval.toHandle(promise);
-	});
+			return {error: errorCode, value: undefined};
+		}
+	);
+	return Emval.toHandle(promise);
+});
 
-	EM_JS(void, em_copy_from_dataview_impl, (void* dst, EM_VAL src), {
-		src = Emval.toValue(src);
-		src = new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
-		HEAPU8.set(src, dst);
-	});
+EM_JS(void, em_copy_from_dataview_impl, (void* dst, EM_VAL src), {
+	src = Emval.toValue(src);
+	src = new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+	HEAPU8.set(src, dst);
+});
 // clang-format on
 
 libusb_transfer_status getTransferStatus(const val& transfer_result) {
@@ -796,6 +796,7 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
 		? usbi_handle_transfer_cancellation(itransfer)
 		: usbi_handle_transfer_completion(itransfer, status);
 }
+
 }  // namespace
 
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
