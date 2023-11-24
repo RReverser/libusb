@@ -171,7 +171,9 @@ void usbi_clear_event(usbi_event_t *event)
 	r = read(EVENT_READ_FD(event), &dummy, sizeof(dummy));
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event read failed");
+#ifdef __EMSCRIPTEN__
 	event->has_event = 0;
+#endif
 }
 
 #ifdef HAVE_TIMERFD
