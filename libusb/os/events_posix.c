@@ -39,7 +39,6 @@
 #include <emscripten.h>
 #include <emscripten/atomic.h>
 #include <emscripten/threading.h>
-#include <stdio.h>
 
 EM_ASYNC_JS(void, em_libusb_wait_async, (const _Atomic int* ptr, int expected_value, int timeout), {
 	await Atomics.waitAsync(HEAP32, ptr >> 2, expected_value, timeout).value;
