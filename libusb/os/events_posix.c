@@ -49,7 +49,7 @@ static int em_libusb_wait(int *ptr, int expected_value, int timeout)
 	if (emscripten_is_main_runtime_thread()) {
 		return em_libusb_wait_async(ptr, expected_value, timeout);
 	} else {
-		return emscripten_atomic_wait_u32(ptr, expected_value, timeout) == ATOMICS_WAIT_OK;
+		return emscripten_atomic_wait_u32(ptr, expected_value, 1000000LL * timeout) == ATOMICS_WAIT_OK;
 	}
 }
 #endif
@@ -157,6 +157,7 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
+	printf("usbi_signal_event %p\n", &event->pipefd[0]);
 	emscripten_atomic_notify(&event->pipefd[0], EMSCRIPTEN_NOTIFY_ALL_WAITERS);
 #endif
 }
@@ -261,6 +262,7 @@ int usbi_wait_for_events(struct libusb_context *ctx,
 		int timeout = until_time - emscripten_get_now();
 		if (timeout <= 0) break;
 		/* Wait on the same address as normally used by callers of `usbi_signal_event`. */
+		printf("em_libusb_wait %p with timeout %d\n", wait_ptr, timeout);
 		if (!em_libusb_wait(wait_ptr, *wait_ptr, timeout)) break;
 	}
 #else
