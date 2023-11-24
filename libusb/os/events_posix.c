@@ -42,7 +42,9 @@
 #include <stdio.h>
 
 EM_ASYNC_JS(int, em_libusb_wait_async, (const int* ptr, int expected_value, int timeout), {
-	return (await Atomics.waitAsync(HEAP32, ptr >> 2, expected_value, timeout).value) === 'ok';
+	let result = await Atomics.waitAsync(HEAP32, ptr >> 2, expected_value, timeout).value;
+	console.log("em_libusb_wait_async", ptr, timeout, result);
+	return result === 'ok';
 });
 
 static int em_libusb_wait(int *ptr, int expected_value, int timeout)
@@ -158,7 +160,6 @@ void usbi_signal_event(usbi_event_t *event)
 	if (r != sizeof(dummy))
 		usbi_warn(NULL, "event write failed");
 #ifdef __EMSCRIPTEN__
-	printf("usbi_signal_event %p\n", &event->pipefd[0]);
 	emscripten_atomic_notify(&event->pipefd[0], EMSCRIPTEN_NOTIFY_ALL_WAITERS);
 #endif
 }
