@@ -95,6 +95,44 @@ EM_JS(void, em_copy_from_dataview_impl, (void* dst, EM_VAL src), {
 	src = new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
 	HEAPU8.set(src, dst);
 });
+
+// Our implementation proxies operations from multiple threads to the same
+// underlying USBDevice on the main thread. This can lead to issues when
+// multiple threads try to open/close the same device at the same time.
+//
+// First, since open/close operations are asynchronous in WebUSB, we can end up
+// with multiple open/close operations in flight at the same time, which can
+// lead to unpredictable outcome (e.g. device got closed but opening succeeded
+// right before that).
+//
+// Second, since multiple threads are allowed to have their own handles to the
+// same device, we need to keep track of number of open handles and close the
+// device only when the last handle is closed.
+//
+// We fix both of these issues by using a shared promise chain that executes
+// open and close operations sequentially and keeps track of the reference count
+// in each promise's result. This way, we can ensure that only one open/close
+// operation is in flight at any given time. Note that we don't need to worry
+// about all other operations because they're preconditioned on the device being
+// open and having at least 1 reference anyway.
+EM_JS(EM_VAL, em_device_safe_open_close_impl, (EM_VAL device, bool open), {
+	device = Emval.toValue(device);
+	const symbol = Symbol.for('libusb.open_close_chain');
+	let promiseChain = device[symbol] ?? Promise.resolve(0);
+	device[symbol] = promiseChain = promiseChain.then(async refCount => {
+		if (open) {
+			if (!refCount++) {
+				await device.open();
+			}
+		} else {
+			if (!--refCount) {
+				await device.close();
+			}
+		}
+		return refCount;
+	});
+	return Emval.toHandle(promiseChain);
+});
 // clang-format on
 
 libusb_transfer_status getTransferStatus(const val& transfer_result) {
@@ -353,6 +391,11 @@ public:
 		: ValPtr(usbi_get_transfer_priv(itransfer)) {}
 };
 
+enum class OpenClose: bool {
+	Open = true,
+	Close = false,
+};
+
 struct CachedDevice {
 	CachedDevice() = delete;
 	CachedDevice(CachedDevice&&) = default;
@@ -366,8 +409,8 @@ struct CachedDevice {
 		val result = co_await cachedDevicePtr->initFromDeviceWithoutClosing(
 			libusb_dev, must_close);
 		if (must_close) {
-			auto result =
-				co_await_caught(cachedDevicePtr->callAsyncAndCatch("close"));
+			auto result = co_await_caught(
+				cachedDevicePtr->safeOpenCloseAssumingMainThread(OpenClose::Close));
 			if (result.error) {
 				co_return result.error;
 			}
@@ -375,10 +418,7 @@ struct CachedDevice {
 		co_return std::move(result);
 	}
 
-	const val& getDeviceAssumingMainThread() const {
-		assert(emscripten_is_main_runtime_thread());
-		return device;
-	}
+	const val& getDeviceAssumingMainThread() const { return device; }
 
 	uint8_t getActiveConfigValue() const {
 		return runOnMain([&]() {
@@ -426,6 +466,18 @@ struct CachedDevice {
 		runOnMain([device = std::move(device)]() {});
 	}
 
+	CaughtPromise safeOpenCloseAssumingMainThread(OpenClose open) {
+		return val::take_ownership(
+			em_device_safe_open_close_impl(device.as_handle(), static_cast<bool>(open)));
+	}
+
+	int safeOpenCloseOnMain(OpenClose open) {
+		return ::awaitOnMain([this, open]() {
+				   return safeOpenCloseAssumingMainThread(open);
+			   })
+			.error;
+	}
+
 private:
 
 	val device;
@@ -456,7 +508,8 @@ private:
 	// in RAII destructor.
 	val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
 		{
-			auto result = co_await_caught(callAsyncAndCatch("open"));
+			auto result =
+				co_await_caught(safeOpenCloseAssumingMainThread(OpenClose::Open));
 			if (result.error) {
 				co_return result.error;
 			}
@@ -608,14 +661,17 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
 }
 
 int em_open(libusb_device_handle* handle) {
-	return WebUsbDevicePtr(handle)->awaitOnMain("open");
+	return WebUsbDevicePtr(handle)->safeOpenCloseOnMain(OpenClose::Open);
 }
 
 void em_close(libusb_device_handle* handle) {
 	// LibUSB API doesn't allow us to handle an error here, but we still need to
 	// wait for the promise to make sure that subsequent attempt to reopen the
 	// same device doesn't fail with a "device busy" error.
-	WebUsbDevicePtr(handle)->awaitOnMain("close");
+	if (auto error = WebUsbDevicePtr(handle)->safeOpenCloseOnMain(OpenClose::Close)) {
+		usbi_err(handle->dev->ctx, "failed to close device: %s",
+				 libusb_error_name(error));
+	}
 }
 
 int em_get_active_config_descriptor(libusb_device* dev, void* buf, size_t len) {
