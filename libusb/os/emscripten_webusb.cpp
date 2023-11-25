@@ -698,7 +698,7 @@ int em_get_config_descriptor_by_value(libusb_device* dev,
 									  void** buf) {
 	auto& cached_device = *WebUsbDevicePtr(dev);
 	if (auto config = cached_device.findConfigDescriptorByValue(config_value)) {
-		*buf = &config;
+		*buf = config;
 		return LIBUSB_SUCCESS;
 	} else {
 		return LIBUSB_ERROR_NOT_FOUND;
