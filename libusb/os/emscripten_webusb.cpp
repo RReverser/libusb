@@ -179,7 +179,7 @@ auto runOnMain(Func&& func) {
 	if (!emscripten_is_main_runtime_thread()) {
 		if constexpr (std::is_same_v<std::invoke_result_t<Func>, void>) {
 			bool proxied =
-				queue.proxySync(emscripten_main_runtime_thread_id(), [&func]() {
+				queue.proxySync(emscripten_main_runtime_thread_id(), [&func] {
 					// Capture func by reference and move into a local variable
 					// to render the captured func inert on the first (and only)
 					// call. This way it can be safely destructed on the main
@@ -198,9 +198,8 @@ auto runOnMain(Func&& func) {
 			// https://github.com/emscripten-core/emscripten/issues/20611 is
 			// implemented.
 			std::optional<std::invoke_result_t<Func>> result;
-			runOnMain([&result, func = std::move(func)]() {
-				result.emplace(func());
-			});
+			runOnMain(
+				[&result, func = std::move(func)] { result.emplace(func()); });
 			return std::move(result.value());
 		}
 	}
@@ -222,7 +221,7 @@ struct PromiseResult {
 
 	~PromiseResult() {
 		// make sure value is freed on the thread it exists on
-		runOnMain([value = std::move(value)]() {});
+		runOnMain([value = std::move(value)] {});
 	}
 };
 
@@ -422,7 +421,7 @@ struct CachedDevice {
 	const val& getDeviceAssumingMainThread() const { return device; }
 
 	uint8_t getActiveConfigValue() const {
-		return runOnMain([&]() {
+		return runOnMain([&] {
 			auto web_usb_config = device["configuration"];
 			return web_usb_config.isNull()
 				? 0
@@ -456,7 +455,7 @@ struct CachedDevice {
 
 	template <typename... Args>
 	int awaitOnMain(const char* methodName, Args&&... args) const {
-		return ::awaitOnMain([&]() {
+		return ::awaitOnMain([&] {
 				   return callAsyncAndCatch(methodName,
 											std::forward<Args>(args)...);
 			   })
@@ -464,7 +463,7 @@ struct CachedDevice {
 	}
 
 	~CachedDevice() {
-		runOnMain([device = std::move(device)]() {});
+		runOnMain([device = std::move(device)] {});
 	}
 
 	CaughtPromise safeOpenCloseAssumingMainThread(OpenClose open) {
@@ -473,7 +472,7 @@ struct CachedDevice {
 	}
 
 	int safeOpenCloseOnMain(OpenClose open) {
-		return ::awaitOnMain([this, open]() {
+		return ::awaitOnMain([this, open] {
 				   return safeOpenCloseAssumingMainThread(open);
 			   })
 			.error;
@@ -657,7 +656,7 @@ int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
 	};
 
 	return awaitOnMain(
-			   [ctx, devs]() { return IntPromise(getDeviceList(ctx, devs)); })
+			   [ctx, devs] { return IntPromise(getDeviceList(ctx, devs)); })
 		.error;
 }
 
@@ -752,7 +751,7 @@ void em_destroy_device(libusb_device* dev) {
 }
 
 int em_submit_transfer(usbi_transfer* itransfer) {
-	return runOnMain([itransfer]() {
+	return runOnMain([itransfer] {
 		auto transfer = USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
 		auto& web_usb_device = WebUsbDevicePtr(transfer->dev_handle)
 								   ->getDeviceAssumingMainThread();
@@ -805,7 +804,7 @@ int em_cancel_transfer(usbi_transfer* itransfer) {
 }
 
 int em_handle_transfer_completion(usbi_transfer* itransfer) {
-	libusb_transfer_status status = runOnMain([itransfer]() {
+	libusb_transfer_status status = runOnMain([itransfer] {
 		auto transfer = USBI_TRANSFER_TO_LIBUSB_TRANSFER(itransfer);
 
 		// Take ownership of the transfer result, as `em_clear_transfer_priv` is
