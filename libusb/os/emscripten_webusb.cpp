@@ -96,6 +96,50 @@ EM_JS(void, em_copy_from_dataview_impl, (void* dst, EM_VAL src), {
 	HEAPU8.set(src, dst);
 });
 
+EM_JS(EM_VAL, em_get_raw_descriptors_impl, (EM_VAL device), {
+	device = Emval.toValue(device);
+	return device[Symbol.for('libusb.raw_descriptors')] ??= (async () => {
+		async function getDescriptor(descType, descIndex) {
+			// Note: requesting more than (platform-specific limit) bytes
+			// here will cause the transfer to fail, see
+			// https://crbug.com/1489414. Use the most common limit of 4096
+			// bytes for now.
+			const MAX_CTRL_BUFFER_LENGTH = 4096;
+
+			const response = await device.controlTransferIn({
+				requestType: 'standard',
+				recipient: 'device',
+				request: 0x06, // GET_DESCRIPTOR
+				value: (descType << 8) | descIndex,
+				index: 0,
+			}, MAX_CTRL_BUFFER_LENGTH);
+
+			if (response.status !== 'ok') {
+				throw new Error(`Failed to get descriptor: ${response.status}`);
+			}
+
+			return response.data;
+		}
+
+		await device.open();
+
+		try {
+			const [device, ...configurations] = await Promise.all([
+				getDescriptor(/* DEVICE */ 1, 0),
+				...device.configurations.map((_, configIndex) =>
+					getDescriptor(/* CONFIGURATION */ 2, configIndex)),
+			]);
+
+			return {
+				device,
+				configurations,
+			};
+		} finally {
+			await device.close();
+		}
+	})();
+});
+
 // Our implementation proxies operations from multiple threads to the same
 // underlying USBDevice on the main thread. This can lead to issues when
 // multiple threads try to open/close the same device at the same time.
@@ -402,20 +446,45 @@ struct CachedDevice {
 	// Fill in the device descriptor and configurations by reading them from the
 	// WebUSB device.
 	static val initFromDevice(val&& web_usb_dev, libusb_device* libusb_dev) {
+		auto result = co_await_caught(CaughtPromise(val::take_ownership(
+			em_get_raw_descriptors_impl(web_usb_dev.as_handle()))));
+		if (result.error) {
+			co_return result.error;
+		}
+		auto& descriptors = result.value;
+
+		copyFromDataView(&libusb_dev->device_descriptor, descriptors["device"]);
+
+		// Infer the device speed (which is not yet provided by WebUSB) from
+		// the descriptor.
+		if (libusb_dev->device_descriptor.bMaxPacketSize0 ==
+			/* actually means 2^9, only valid for superspeeds */ 9) {
+			libusb_dev->speed = libusb_dev->device_descriptor.bcdUSB >= 0x0310
+				? LIBUSB_SPEED_SUPER_PLUS
+				: LIBUSB_SPEED_SUPER;
+		} else if (libusb_dev->device_descriptor.bcdUSB >= 0x0200) {
+			libusb_dev->speed = LIBUSB_SPEED_HIGH;
+		} else if (libusb_dev->device_descriptor.bMaxPacketSize0 > 8) {
+			libusb_dev->speed = LIBUSB_SPEED_FULL;
+		} else {
+			libusb_dev->speed = LIBUSB_SPEED_LOW;
+		}
+
+		if (auto error = usbi_sanitize_device(libusb_dev)) {
+			co_return error;
+		}
+
 		auto cachedDevicePtr = WebUsbDevicePtr(libusb_dev);
 		cachedDevicePtr.emplace(std::move(web_usb_dev));
-		bool must_close = false;
-		val result = co_await cachedDevicePtr->initFromDeviceWithoutClosing(
-			libusb_dev, must_close);
-		if (must_close) {
-			auto result = co_await_caught(
-				cachedDevicePtr->safeOpenCloseAssumingMainThread(
-					OpenClose::Close));
-			if (result.error) {
-				co_return result.error;
-			}
+
+		for (const auto& configDescriptor : descriptors["configurations"]) {
+			auto configLen = configDescriptor["byteLength"].as<size_t>();
+			auto& config = cachedDevicePtr->configurations.emplace_back(
+				(usbi_configuration_descriptor*)::operator new(configLen));
+			copyFromDataView(config.get(), configDescriptor);
 		}
-		co_return std::move(result);
+
+		co_return (int) LIBUSB_SUCCESS;
 	}
 
 	const val& getDeviceAssumingMainThread() const { return device; }
@@ -466,14 +535,11 @@ struct CachedDevice {
 		runOnMain([device = std::move(device)] {});
 	}
 
-	CaughtPromise safeOpenCloseAssumingMainThread(OpenClose open) {
-		return val::take_ownership(em_device_safe_open_close_impl(
-			device.as_handle(), static_cast<bool>(open)));
-	}
-
 	int safeOpenCloseOnMain(OpenClose open) {
 		return ::awaitOnMain([this, open] {
-				   return safeOpenCloseAssumingMainThread(open);
+				   return CaughtPromise(
+					   val::take_ownership(em_device_safe_open_close_impl(
+						   device.as_handle(), static_cast<bool>(open))));
 			   })
 			.error;
 	}
@@ -487,95 +553,6 @@ private:
 	CaughtPromise callAsyncAndCatch(const char* methodName,
 									Args&&... args) const {
 		return device.call<val>(methodName, std::forward<Args>(args)...);
-	}
-
-	CaughtPromise requestDescriptor(libusb_descriptor_type desc_type,
-									uint8_t desc_index,
-									uint16_t max_length) const {
-		libusb_control_setup setup = {
-			.bmRequestType = LIBUSB_ENDPOINT_IN,
-			.bRequest = LIBUSB_REQUEST_GET_DESCRIPTOR,
-			.wValue = (uint16_t)((desc_type << 8) | desc_index),
-			.wIndex = 0,
-			.wLength = max_length,
-		};
-		return makeControlTransferPromise(device, &setup);
-	}
-
-	// Implementation of the `CachedDevice::initFromDevice` above. This is a
-	// separate function just because we need to close the device on exit if
-	// we opened it successfully, and we can't use an async operation (`close`)
-	// in RAII destructor.
-	val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
-		{
-			auto result = co_await_caught(
-				safeOpenCloseAssumingMainThread(OpenClose::Open));
-			if (result.error) {
-				co_return result.error;
-			}
-		}
-
-		// Can't use RAII to close on exit as co_await is not permitted in
-		// destructors (yet:
-		// https://github.com/cplusplus/papers/issues/445), so use a good
-		// old boolean + a wrapper instead.
-		must_close = true;
-
-		{
-			auto result = co_await_caught(
-				requestDescriptor(LIBUSB_DT_DEVICE, 0, LIBUSB_DT_DEVICE_SIZE));
-			if (result.error) {
-				co_return result.error;
-			}
-			if (auto error = getTransferStatus(result.value)) {
-				co_return error;
-			}
-			copyFromDataView(&dev->device_descriptor, result.value["data"]);
-		}
-
-		// Infer the device speed (which is not yet provided by WebUSB) from
-		// the descriptor.
-		if (dev->device_descriptor.bMaxPacketSize0 ==
-			/* actually means 2^9, only valid for superspeeds */ 9) {
-			dev->speed = dev->device_descriptor.bcdUSB >= 0x0310
-				? LIBUSB_SPEED_SUPER_PLUS
-				: LIBUSB_SPEED_SUPER;
-		} else if (dev->device_descriptor.bcdUSB >= 0x0200) {
-			dev->speed = LIBUSB_SPEED_HIGH;
-		} else if (dev->device_descriptor.bMaxPacketSize0 > 8) {
-			dev->speed = LIBUSB_SPEED_FULL;
-		} else {
-			dev->speed = LIBUSB_SPEED_LOW;
-		}
-
-		if (auto error = usbi_sanitize_device(dev)) {
-			co_return error;
-		}
-
-		auto configurations_len = dev->device_descriptor.bNumConfigurations;
-		configurations.reserve(configurations_len);
-		for (uint8_t j = 0; j < configurations_len; j++) {
-			// Note: requesting more than (platform-specific limit) bytes
-			// here will cause the transfer to fail, see
-			// https://crbug.com/1489414. Use the most common limit of 4096
-			// bytes for now.
-			constexpr uint16_t MAX_CTRL_BUFFER_LENGTH = 4096;
-			auto result = co_await_caught(
-				requestDescriptor(LIBUSB_DT_CONFIG, j, MAX_CTRL_BUFFER_LENGTH));
-			if (result.error) {
-				co_return result.error;
-			}
-			if (auto error = getTransferStatus(result.value)) {
-				co_return error;
-			}
-			auto configVal = result.value["data"];
-			auto configLen = configVal["byteLength"].as<size_t>();
-			auto& config = configurations.emplace_back(
-				(usbi_configuration_descriptor*)::operator new(configLen));
-			copyFromDataView(config.get(), configVal);
-		}
-
-		co_return (int) LIBUSB_SUCCESS;
 	}
 
 	CachedDevice(val device) : device(std::move(device)) {}
