@@ -391,7 +391,7 @@ public:
 		: ValPtr(usbi_get_transfer_priv(itransfer)) {}
 };
 
-enum class OpenClose: bool {
+enum class OpenClose : bool {
 	Open = true,
 	Close = false,
 };
@@ -410,7 +410,8 @@ struct CachedDevice {
 			libusb_dev, must_close);
 		if (must_close) {
 			auto result = co_await_caught(
-				cachedDevicePtr->safeOpenCloseAssumingMainThread(OpenClose::Close));
+				cachedDevicePtr->safeOpenCloseAssumingMainThread(
+					OpenClose::Close));
 			if (result.error) {
 				co_return result.error;
 			}
@@ -467,8 +468,8 @@ struct CachedDevice {
 	}
 
 	CaughtPromise safeOpenCloseAssumingMainThread(OpenClose open) {
-		return val::take_ownership(
-			em_device_safe_open_close_impl(device.as_handle(), static_cast<bool>(open)));
+		return val::take_ownership(em_device_safe_open_close_impl(
+			device.as_handle(), static_cast<bool>(open)));
 	}
 
 	int safeOpenCloseOnMain(OpenClose open) {
@@ -508,8 +509,8 @@ private:
 	// in RAII destructor.
 	val initFromDeviceWithoutClosing(libusb_device* dev, bool& must_close) {
 		{
-			auto result =
-				co_await_caught(safeOpenCloseAssumingMainThread(OpenClose::Open));
+			auto result = co_await_caught(
+				safeOpenCloseAssumingMainThread(OpenClose::Open));
 			if (result.error) {
 				co_return result.error;
 			}
@@ -668,7 +669,8 @@ void em_close(libusb_device_handle* handle) {
 	// LibUSB API doesn't allow us to handle an error here, but we still need to
 	// wait for the promise to make sure that subsequent attempt to reopen the
 	// same device doesn't fail with a "device busy" error.
-	if (auto error = WebUsbDevicePtr(handle)->safeOpenCloseOnMain(OpenClose::Close)) {
+	if (auto error =
+			WebUsbDevicePtr(handle)->safeOpenCloseOnMain(OpenClose::Close)) {
 		usbi_err(handle->dev->ctx, "failed to close device: %s",
 				 libusb_error_name(error));
 	}
