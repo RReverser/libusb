@@ -28,6 +28,7 @@ static_assert((__EMSCRIPTEN_major__ * 100 * 100 + __EMSCRIPTEN_minor__ * 100 +
 
 #include <assert.h>
 #include <emscripten.h>
+#include <emscripten/bind.h>
 #include <emscripten/val.h>
 
 #include <type_traits>
@@ -585,63 +586,112 @@ unsigned long getDeviceSessionId(val& web_usb_device) {
 	return next_session_id++;
 }
 
-val getDeviceList(libusb_context* ctx, discovered_devs** devs) {
+val connectDevice(libusb_context* ctx, val&& web_usb_device) {
+	auto session_id = getDeviceSessionId(web_usb_device);
+
+	auto dev = usbi_get_device_by_session_id(ctx, session_id);
+	if (dev) {
+		usbi_dbg(ctx, "found previously allocated device #%lu", session_id);
+		libusb_unref_device(dev);
+		co_return val::undefined();
+	}
+
+	dev = usbi_alloc_device(ctx, session_id);
+	if (!dev) {
+		usbi_err(ctx, "failed to allocate a new device structure");
+		co_return val::undefined();
+	}
+
+	auto statusVal =
+		co_await CachedDevice::initFromDevice(std::move(web_usb_device), dev);
+	auto error = statusVal.as<int>();
+	if (!error) {
+		usbi_connect_device(dev);
+		co_return val::undefined();
+	}
+	usbi_err(ctx, "failed to read device information: %s",
+			 libusb_error_name(error));
+	libusb_unref_device(dev);
+	co_return val::undefined();
+}
+
+__attribute__((export_name("em_libusb_onDeviceConnect"))) extern "C" void
+onDeviceConnect(EM_VAL device_handle) {
+	([device_handle]() -> val {
+		auto device = val::take_ownership(device_handle);
+		libusb_context* ctx;
+		for_each_context(ctx) {
+			co_await connectDevice(ctx, val(device));
+		}
+		co_return val::undefined();
+	})();
+}
+
+__attribute__((export_name("em_libusb_onDeviceDisconnect"))) extern "C" void
+onDeviceDisconnect(EM_VAL device_handle) {
+	auto device = val::take_ownership(device_handle);
+	auto session_id = getDeviceSessionId(device);
+	libusb_context* ctx;
+	for_each_context(ctx) {
+		if (auto dev = usbi_get_device_by_session_id(ctx, session_id)) {
+			usbi_disconnect_device(dev);
+			libusb_unref_device(dev);
+		}
+	}
+}
+
+EM_JS(void, em_setup_callbacks, (), {
+	navigator.usb.addEventListener(
+		'connect',
+		(e) = > { _em_libusb_onDeviceConnect(Emval.toHandle(e.device)); });
+	navigator.usb.addEventListener(
+		'disconnect',
+		(e) = > { _em_libusb_onDeviceDisconnect(Emval.toHandle(e.device)); });
+});
+
+thread_local const val web_usb = val::global("navigator")["usb"];
+
+val populateDeviceList(libusb_context* ctx) {
 	// C++ equivalent of `await navigator.usb.getDevices()`. Note: at this point
 	// we must already have some devices exposed - caller must have called
 	// `await navigator.usb.requestDevice(...)` in response to user interaction
 	// before going to LibUSB. Otherwise this list will be empty.
-	auto web_usb_devices =
-		co_await_try(val::global("navigator")["usb"].call<val>("getDevices"));
-	for (auto&& web_usb_device : web_usb_devices) {
-		auto session_id = getDeviceSessionId(web_usb_device);
-
-		auto dev = usbi_get_device_by_session_id(ctx, session_id);
-		if (dev == NULL) {
-			dev = usbi_alloc_device(ctx, session_id);
-			if (dev == NULL) {
-				usbi_err(ctx, "failed to allocate a new device structure");
-				continue;
-			}
-
-			auto statusVal = co_await CachedDevice::initFromDevice(
-				std::move(web_usb_device), dev);
-			if (auto error = statusVal.as<int>()) {
-				usbi_err(ctx, "failed to read device information: %s",
-						 libusb_error_name(error));
-				libusb_unref_device(dev);
-				continue;
-			}
-
-			// We don't have real buses in WebUSB, just pretend everything
-			// is on bus 1.
-			dev->bus_number = 1;
-			// This can wrap around but it's the best approximation of a stable
-			// device address and port number we can provide.
-			dev->device_address = dev->port_number = (uint8_t)session_id;
-		}
-		*devs = discovered_devs_append(*devs, dev);
-		libusb_unref_device(dev);
+	auto result =
+		co_await_caught(CaughtPromise(web_usb.call<val>("getDevices")));
+	if (result.error) {
+		co_return result.error;
+	}
+	for (auto&& web_usb_device : result.value) {
+		co_await connectDevice(ctx, std::move(web_usb_device));
 	}
 	co_return (int) LIBUSB_SUCCESS;
 }
 
-int em_get_device_list(libusb_context* ctx, discovered_devs** devs) {
-	// No need to wrap into CaughtPromise as we catch all individual ops in the
-	// inner implementation and return just the error code. We do need a custom
-	// promise type to ensure conversion to int happens on the main thread
-	// though.
-	struct IntPromise : val {
-		IntPromise(val&& promise) : val(std::move(promise)) {}
+int em_init(libusb_context* ctx) {
+	return awaitOnMain([ctx]() {
+			   static bool first_init = true;
 
-		struct AwaitResult {
-			int error;
+			   if (first_init) {
+				   em_setup_callbacks();
+				   first_init = false;
+			   }
 
-			AwaitResult(val&& result) : error(result.as<int>()) {}
-		};
-	};
+			   // No need to wrap into CaughtPromise as we catch all individual
+			   // ops in the inner implementation and return just the error
+			   // code. We do need a custom promise type to ensure conversion to
+			   // int happens on the main thread though.
+			   struct IntPromise : val {
+				   IntPromise(val&& promise) : val(std::move(promise)) {}
 
-	return awaitOnMain(
-			   [ctx, devs] { return IntPromise(getDeviceList(ctx, devs)); })
+				   struct AwaitResult {
+					   int error;
+
+					   AwaitResult(val&& result) : error(result.as<int>()) {}
+				   };
+			   };
+
+			   return IntPromise(populateDeviceList(ctx));
+		   })
 		.error;
 }
 
@@ -844,8 +894,8 @@ int em_handle_transfer_completion(usbi_transfer* itransfer) {
 #pragma clang diagnostic ignored "-Wmissing-field-initializers"
 extern "C" const usbi_os_backend usbi_backend = {
 	.name = "Emscripten + WebUSB backend",
-	.caps = LIBUSB_CAP_HAS_CAPABILITY,
-	.get_device_list = em_get_device_list,
+	.caps = LIBUSB_CAP_HAS_CAPABILITY | LIBUSB_CAP_HAS_HOTPLUG,
+	.init = em_init,
 	.open = em_open,
 	.close = em_close,
 	.get_active_config_descriptor = em_get_active_config_descriptor,
