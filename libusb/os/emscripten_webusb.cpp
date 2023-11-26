@@ -98,7 +98,7 @@ EM_JS(void, em_copy_from_dataview_impl, (void* dst, EM_VAL src), {
 
 EM_JS(EM_VAL, em_get_raw_descriptors_impl, (EM_VAL device), {
 	device = Emval.toValue(device);
-	return device[Symbol.for('libusb.raw_descriptors')] ??= (async () => {
+	const promise = device[Symbol.for('libusb.raw_descriptors')] ??= (async () => {
 		async function getDescriptor(descType, descIndex) {
 			// Note: requesting more than (platform-specific limit) bytes
 			// here will cause the transfer to fail, see
@@ -124,20 +124,24 @@ EM_JS(EM_VAL, em_get_raw_descriptors_impl, (EM_VAL device), {
 		await device.open();
 
 		try {
-			const [device, ...configurations] = await Promise.all([
+			const [deviceDesc, ...configurationDescs] = await Promise.all([
 				getDescriptor(/* DEVICE */ 1, 0),
 				...device.configurations.map((_, configIndex) =>
 					getDescriptor(/* CONFIGURATION */ 2, configIndex)),
 			]);
 
 			return {
-				device,
-				configurations,
+				device: deviceDesc,
+				configurations: configurationDescs,
 			};
+		} catch (err) {
+			console.error(err);
+			throw err;
 		} finally {
 			await device.close();
 		}
 	})();
+	return Emval.toHandle(promise);
 });
 
 // Our implementation proxies operations from multiple threads to the same
