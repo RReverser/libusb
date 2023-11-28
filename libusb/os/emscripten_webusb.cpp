@@ -135,6 +135,24 @@ EM_JS(EM_VAL, usbi_em_device_safe_open_close, (EM_VAL device, bool open), {
 	});
 	return Emval.toHandle(promiseChain);
 });
+
+EM_JS(EM_VAL, usbi_em_setup_events, (), {
+	function onConnect(e) {
+		_usbi_em_on_device_connect(Emval.toHandle(e.device));
+	}
+
+	function onDisconnect(e) {
+		_usbi_em_on_device_disconnect(Emval.toHandle(e.device));
+	}
+
+	navigator.usb.addEventListener('connect', onConnect);
+	navigator.usb.addEventListener('disconnect', onDisconnect);
+
+	return Emval.toHandle(() => {
+		navigator.usb.removeEventListener('connect', onConnect);
+		navigator.usb.removeEventListener('disconnect', onDisconnect);
+	});
+});
 // clang-format on
 
 libusb_transfer_status getTransferStatus(const val& transfer_result) {
@@ -615,7 +633,7 @@ val connectDevice(libusb_context* ctx, val&& web_usb_device) {
 	co_return val::undefined();
 }
 
-__attribute__((export_name("em_libusb_onDeviceConnect"))) extern "C" void
+__attribute__((export_name("usbi_em_on_device_connect"))) extern "C" void
 onDeviceConnect(EM_VAL device_handle) {
 	([device_handle]() -> val {
 		auto device = val::take_ownership(device_handle);
@@ -627,7 +645,7 @@ onDeviceConnect(EM_VAL device_handle) {
 	})();
 }
 
-__attribute__((export_name("em_libusb_onDeviceDisconnect"))) extern "C" void
+__attribute__((export_name("usbi_em_on_device_disconnect"))) extern "C" void
 onDeviceDisconnect(EM_VAL device_handle) {
 	auto device = val::take_ownership(device_handle);
 	auto session_id = getDeviceSessionId(device);
@@ -639,15 +657,6 @@ onDeviceDisconnect(EM_VAL device_handle) {
 		}
 	}
 }
-
-EM_JS(void, em_setup_callbacks, (), {
-	navigator.usb.addEventListener(
-		'connect',
-		(e) = > { _em_libusb_onDeviceConnect(Emval.toHandle(e.device)); });
-	navigator.usb.addEventListener(
-		'disconnect',
-		(e) = > { _em_libusb_onDeviceDisconnect(Emval.toHandle(e.device)); });
-});
 
 thread_local const val web_usb = val::global("navigator")["usb"];
 
@@ -667,13 +676,14 @@ val populateDeviceList(libusb_context* ctx) {
 	co_return (int) LIBUSB_SUCCESS;
 }
 
+static std::atomic<int> context_count;
+thread_local val unsubscribe_events;
+
 int em_init(libusb_context* ctx) {
 	return awaitOnMain([ctx]() {
-			   static bool first_init = true;
-
-			   if (first_init) {
-				   em_setup_callbacks();
-				   first_init = false;
+			   if (!context_count++) {
+				   unsubscribe_events =
+					   val::take_ownership(usbi_em_setup_events());
 			   }
 
 			   // No need to wrap into CaughtPromise as we catch all individual
@@ -693,6 +703,15 @@ int em_init(libusb_context* ctx) {
 			   return IntPromise(populateDeviceList(ctx));
 		   })
 		.error;
+}
+
+void em_exit(libusb_context* ctx) {
+	if (!--context_count) {
+		runOnMain([] {
+			unsubscribe_events();
+			unsubscribe_events = val::undefined();
+		});
+	}
 }
 
 int em_open(libusb_device_handle* handle) {
@@ -896,6 +915,7 @@ extern "C" const usbi_os_backend usbi_backend = {
 	.name = "Emscripten + WebUSB backend",
 	.caps = LIBUSB_CAP_HAS_CAPABILITY | LIBUSB_CAP_HAS_HOTPLUG,
 	.init = em_init,
+	.exit = em_exit,
 	.open = em_open,
 	.close = em_close,
 	.get_active_config_descriptor = em_get_active_config_descriptor,
