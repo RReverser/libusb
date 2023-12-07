@@ -28,15 +28,18 @@ const typeSet = {
   Version: ['const', 'uint16', 0x0111, true],
 
   PrefixedArray: jBinary.Template({
-    setParams(lenType, itemType) {
-      this.baseType = {
-        len: lenType,
-        items: ['array', itemType, 'len']
-      };
+    params: ['lenType', 'itemType'],
+    typeParams: ['lenType', 'itemType'],
+
+    baseType: {
+      len: 'lenType',
+      items: ['array', 'itemType', 'len']
     },
+
     read() {
       return this.baseRead().items;
     },
+
     write(arr) {
       this.baseWrite({ len: arr.length, items: arr });
     }
@@ -209,6 +212,11 @@ const typeSet = {
   ]
 };
 
+/** @type {USBDevice[]} */
+let fakeDeviceList = [{
+
+}];
+
 createServer(socket => {
   let attached = false;
 
@@ -217,10 +225,39 @@ createServer(socket => {
     let jb = new jBinary(inputMsg, typeSet);
     if (!attached) {
       let cmd = jb.read('OpReq');
+      switch (cmd.command) {
+        case 'devList': {
+          jb.write('OpRepDevlist', {
+            status: 0,
+            devices: fakeDeviceList.map((device, i) => ({
+              path: `/webusb/1-${i}`,
+              busId: `1-${i}`,
+              busNum: 1,
+              devNum: i,
+              speed: /* FULL - we don't actually know speed */ 2,
+              idVendor: device.vendorId,
+              idProduct: device.productId,
+              bcdDevice: (device.usbVersionMajor << 8) | (device.usbVersionMinor << 4) | device.usbVersionSubminor,
+              bDeviceClass: device.deviceClass,
+              bDeviceSubClass: device.deviceSubclass,
+              bDeviceProtocol: device.deviceProtocol,
+              bConfigurationValue: device.configuration.configurationValue,
+              bNumConfigurations: device.configurations.length,
+              interfaces: device.configurations.flatMap(configuration => configuration.interfaces)
+              .map((interface_) => ({
+                bInterfaceClass: interface_.interfaceClass,
+                bInterfaceSubClass: interface_.interfaceSubclass,
+                bInterfaceProtocol: interface_.interfaceProtocol
+              }))
+            }))
+          });
+          break;
+        }
+
+      }
     } else {
       console.log(jb.read('UsbIpCmd'));
     }
-    assert.equal(jb.tell(), jb.view.byteLength);
   }
 }).listen(3240);
 
