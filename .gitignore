@@ -6,7 +6,8 @@ Makefile.in
 *.la
 *.lo
 *.o
-*.js
+examples/*.js
+tests/*.js
 *.wasm
 *.html
 libtool
