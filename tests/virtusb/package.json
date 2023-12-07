@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "node_usbip_server": "^0.4.0"
+  }
+}
