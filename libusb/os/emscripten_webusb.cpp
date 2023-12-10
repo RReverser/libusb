@@ -665,12 +665,8 @@ val populateDeviceList(libusb_context* ctx) {
 	// we must already have some devices exposed - caller must have called
 	// `await navigator.usb.requestDevice(...)` in response to user interaction
 	// before going to LibUSB. Otherwise this list will be empty.
-	auto result =
-		co_await_caught(CaughtPromise(web_usb.call<val>("getDevices")));
-	if (result.error) {
-		co_return result.error;
-	}
-	for (auto&& web_usb_device : result.value) {
+	auto web_usb_devices = co_await_try(web_usb.call<val>("getDevices"));
+	for (auto&& web_usb_device : web_usb_devices) {
 		co_await connectDevice(ctx, std::move(web_usb_device));
 	}
 	co_return (int) LIBUSB_SUCCESS;
