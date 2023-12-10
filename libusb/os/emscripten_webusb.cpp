@@ -426,6 +426,8 @@ public:
 			unsubscribe();
 		});
 	}
+
+	friend struct ValPtr<Context>;
 };
 
 struct CachedDevice;
