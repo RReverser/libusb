@@ -136,21 +136,27 @@ EM_JS(EM_VAL, usbi_em_device_safe_open_close, (EM_VAL device, bool open), {
 	return Emval.toHandle(promiseChain);
 });
 
-EM_JS(EM_VAL, usbi_em_setup_events, (), {
-	function onConnect(e) {
-		_usbi_em_on_device_connect(Emval.toHandle(e.device));
-	}
+EM_JS(EM_VAL, usbi_em_setup_events, (libusb_context* ctx), {
+	return navigator.usb.getDevices().then(devices => {
+		function onConnect(e) {
+			_usbi_em_on_device_connect(ctx, Emval.toHandle(e.device));
+		}
 
-	function onDisconnect(e) {
-		_usbi_em_on_device_disconnect(Emval.toHandle(e.device));
-	}
+		function onDisconnect(e) {
+			_usbi_em_on_device_disconnect(ctx, Emval.toHandle(e.device));
+		}
 
-	navigator.usb.addEventListener('connect', onConnect);
-	navigator.usb.addEventListener('disconnect', onDisconnect);
+		for (let device of devices) {
+			onConnect({ device });
+		}
 
-	return Emval.toHandle(() => {
-		navigator.usb.removeEventListener('connect', onConnect);
-		navigator.usb.removeEventListener('disconnect', onDisconnect);
+		navigator.usb.addEventListener('connect', onConnect);
+		navigator.usb.addEventListener('disconnect', onDisconnect);
+
+		return () => {
+			navigator.usb.removeEventListener('connect', onConnect);
+			navigator.usb.removeEventListener('disconnect', onDisconnect);
+		};
 	});
 });
 // clang-format on
@@ -394,6 +400,34 @@ private:
 	T* ptr;
 };
 
+class Context;
+
+struct WebUsbContextPtr : ValPtr<Context> {
+public:
+
+	WebUsbContextPtr(libusb_context* ctx) : ValPtr(usbi_get_context_priv(ctx)) {}
+};
+
+class Context {
+	val unsubscribe;
+
+	Context(val&& unsubscribe) : unsubscribe(std::move(unsubscribe)) {}
+
+public:
+
+	static PromiseResult init(libusb_context* ctx) {
+		return awaitOnMain([ctx] {
+			return CaughtPromise(val::take_ownership(usbi_em_setup_events(ctx)));
+		});
+	}
+
+	~Context() {
+		runOnMain([unsubscribe = std::move(unsubscribe)] {
+			unsubscribe();
+		});
+	}
+};
+
 struct CachedDevice;
 
 struct WebUsbDevicePtr : ValPtr<CachedDevice> {
@@ -634,80 +668,30 @@ val connectDevice(libusb_context* ctx, val&& web_usb_device) {
 }
 
 __attribute__((export_name("usbi_em_on_device_connect"))) extern "C" void
-onDeviceConnect(EM_VAL device_handle) {
-	([device_handle]() -> val {
-		auto device = val::take_ownership(device_handle);
-		libusb_context* ctx;
-		for_each_context(ctx) {
-			co_await connectDevice(ctx, val(device));
-		}
-		co_return val::undefined();
-	})();
+onDeviceConnect(libusb_context* ctx, EM_VAL device_handle) {
+	connectDevice(ctx, val::take_ownership(device_handle));
 }
 
 __attribute__((export_name("usbi_em_on_device_disconnect"))) extern "C" void
-onDeviceDisconnect(EM_VAL device_handle) {
+onDeviceDisconnect(libusb_context* ctx, EM_VAL device_handle) {
 	auto device = val::take_ownership(device_handle);
 	auto session_id = getDeviceSessionId(device);
-	libusb_context* ctx;
-	for_each_context(ctx) {
-		if (auto dev = usbi_get_device_by_session_id(ctx, session_id)) {
-			usbi_disconnect_device(dev);
-			libusb_unref_device(dev);
-		}
+	if (auto dev = usbi_get_device_by_session_id(ctx, session_id)) {
+		usbi_disconnect_device(dev);
+		libusb_unref_device(dev);
 	}
 }
-
-thread_local const val web_usb = val::global("navigator")["usb"];
-
-val populateDeviceList(libusb_context* ctx) {
-	// C++ equivalent of `await navigator.usb.getDevices()`. Note: at this point
-	// we must already have some devices exposed - caller must have called
-	// `await navigator.usb.requestDevice(...)` in response to user interaction
-	// before going to LibUSB. Otherwise this list will be empty.
-	auto web_usb_devices = co_await_try(web_usb.call<val>("getDevices"));
-	for (auto&& web_usb_device : web_usb_devices) {
-		co_await connectDevice(ctx, std::move(web_usb_device));
-	}
-	co_return (int) LIBUSB_SUCCESS;
-}
-
-static std::atomic<int> context_count;
-thread_local val unsubscribe_events;
 
 int em_init(libusb_context* ctx) {
-	return awaitOnMain([ctx]() {
-			   if (!context_count++) {
-				   unsubscribe_events =
-					   val::take_ownership(usbi_em_setup_events());
-			   }
-
-			   // No need to wrap into CaughtPromise as we catch all individual
-			   // ops in the inner implementation and return just the error
-			   // code. We do need a custom promise type to ensure conversion to
-			   // int happens on the main thread though.
-			   struct IntPromise : val {
-				   IntPromise(val&& promise) : val(std::move(promise)) {}
-
-				   struct AwaitResult {
-					   int error;
-
-					   AwaitResult(val&& result) : error(result.as<int>()) {}
-				   };
-			   };
-
-			   return IntPromise(populateDeviceList(ctx));
-		   })
-		.error;
+	auto result = Context::init(ctx);
+	if (!result.error) {
+		WebUsbContextPtr(ctx).emplace(std::move(result.value));
+	}
+	return result.error;
 }
 
 void em_exit(libusb_context* ctx) {
-	if (!--context_count) {
-		runOnMain([] {
-			unsubscribe_events();
-			unsubscribe_events = val::undefined();
-		});
-	}
+	WebUsbContextPtr(ctx).free();
 }
 
 int em_open(libusb_device_handle* handle) {
@@ -929,6 +913,7 @@ extern "C" const usbi_os_backend usbi_backend = {
 	.cancel_transfer = em_cancel_transfer,
 	.clear_transfer_priv = em_clear_transfer_priv,
 	.handle_transfer_completion = em_handle_transfer_completion,
+	.context_priv_size = sizeof(val),
 	.device_priv_size = sizeof(CachedDevice),
 	.transfer_priv_size = sizeof(PromiseResult),
 };
